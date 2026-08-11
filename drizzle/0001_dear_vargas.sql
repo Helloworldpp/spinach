@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `matches_one_active_unique` ON `matches` ((1)) WHERE "matches"."status" != 'settled';

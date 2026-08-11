@@ -1,0 +1,289 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "912e3adf-886a-40dd-9ff7-7bcf99b14744",
+  "prevId": "aabf6dcc-5c0f-4a56-96ff-3128cd71c163",
+  "tables": {
+    "bets": {
+      "name": "bets",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "match_id": {
+          "name": "match_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bettor_name": {
+          "name": "bettor_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bettor_key": {
+          "name": "bettor_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "amount_cents": {
+          "name": "amount_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "winner_pick": {
+          "name": "winner_pick",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "predicted_score_a": {
+          "name": "predicted_score_a",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "predicted_score_b": {
+          "name": "predicted_score_b",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "bets_match_bettor_mode_unique": {
+          "name": "bets_match_bettor_mode_unique",
+          "columns": [
+            "match_id",
+            "bettor_key",
+            "mode"
+          ],
+          "isUnique": true
+        },
+        "bets_match_created_idx": {
+          "name": "bets_match_created_idx",
+          "columns": [
+            "match_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "bets_match_id_matches_id_fk": {
+          "name": "bets_match_id_matches_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "matches",
+          "columnsFrom": [
+            "match_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "bets_mode_check": {
+          "name": "bets_mode_check",
+          "value": "\"bets\".\"mode\" IN ('winner', 'score')"
+        },
+        "bets_amount_check": {
+          "name": "bets_amount_check",
+          "value": "\"bets\".\"amount_cents\" > 0"
+        },
+        "bets_selection_check": {
+          "name": "bets_selection_check",
+          "value": "(\n        \"bets\".\"mode\" = 'winner'\n        AND \"bets\".\"winner_pick\" IN ('A', 'B')\n        AND \"bets\".\"predicted_score_a\" IS NULL\n        AND \"bets\".\"predicted_score_b\" IS NULL\n      ) OR (\n        \"bets\".\"mode\" = 'score'\n        AND \"bets\".\"winner_pick\" IS NULL\n        AND \"bets\".\"predicted_score_a\" IS NOT NULL\n        AND \"bets\".\"predicted_score_b\" IS NOT NULL\n        AND \"bets\".\"predicted_score_a\" >= 0\n        AND \"bets\".\"predicted_score_b\" >= 0\n      )"
+        }
+      }
+    },
+    "matches": {
+      "name": "matches",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "player_a": {
+          "name": "player_a",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "player_b": {
+          "name": "player_b",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "race_to": {
+          "name": "race_to",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 3
+        },
+        "stake_limit_cents": {
+          "name": "stake_limit_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1000
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'open'"
+        },
+        "result_score_a": {
+          "name": "result_score_a",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_score_b": {
+          "name": "result_score_b",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "matches_one_active_unique": {
+          "name": "matches_one_active_unique",
+          "columns": [
+            "(1)"
+          ],
+          "isUnique": true,
+          "where": "\"matches\".\"status\" != 'settled'"
+        },
+        "matches_status_created_idx": {
+          "name": "matches_status_created_idx",
+          "columns": [
+            "status",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "matches_status_check": {
+          "name": "matches_status_check",
+          "value": "\"matches\".\"status\" IN ('open', 'closed', 'settled')"
+        },
+        "matches_race_to_check": {
+          "name": "matches_race_to_check",
+          "value": "\"matches\".\"race_to\" > 0"
+        },
+        "matches_stake_limit_check": {
+          "name": "matches_stake_limit_check",
+          "value": "\"matches\".\"stake_limit_cents\" > 0"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {
+      "matches_one_active_unique": {
+        "columns": {
+          "(1)": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}
