@@ -1,0 +1,540 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "c8edeaac-fb0c-4817-91ec-7d549973ca7d",
+  "prevId": "ee389fb4-9c36-4ffd-90aa-086b6fa9a85d",
+  "tables": {
+    "bets": {
+      "name": "bets",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "match_id": {
+          "name": "match_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bettor_name": {
+          "name": "bettor_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bettor_key": {
+          "name": "bettor_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "amount_cents": {
+          "name": "amount_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "winner_pick": {
+          "name": "winner_pick",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "predicted_score_a": {
+          "name": "predicted_score_a",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "predicted_score_b": {
+          "name": "predicted_score_b",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "bets_match_bettor_mode_unique": {
+          "name": "bets_match_bettor_mode_unique",
+          "columns": [
+            "match_id",
+            "bettor_key",
+            "mode"
+          ],
+          "isUnique": true
+        },
+        "bets_match_created_idx": {
+          "name": "bets_match_created_idx",
+          "columns": [
+            "match_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "bets_match_id_matches_id_fk": {
+          "name": "bets_match_id_matches_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "matches",
+          "columnsFrom": [
+            "match_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "bets_mode_check": {
+          "name": "bets_mode_check",
+          "value": "\"bets\".\"mode\" IN ('winner', 'score')"
+        },
+        "bets_amount_check": {
+          "name": "bets_amount_check",
+          "value": "\"bets\".\"amount_cents\" > 0"
+        },
+        "bets_selection_check": {
+          "name": "bets_selection_check",
+          "value": "(\n        \"bets\".\"mode\" = 'winner'\n        AND \"bets\".\"winner_pick\" IN ('A', 'B')\n        AND \"bets\".\"predicted_score_a\" IS NULL\n        AND \"bets\".\"predicted_score_b\" IS NULL\n      ) OR (\n        \"bets\".\"mode\" = 'score'\n        AND \"bets\".\"winner_pick\" IS NULL\n        AND \"bets\".\"predicted_score_a\" IS NOT NULL\n        AND \"bets\".\"predicted_score_b\" IS NOT NULL\n        AND \"bets\".\"predicted_score_a\" >= 0\n        AND \"bets\".\"predicted_score_b\" >= 0\n      )"
+        }
+      }
+    },
+    "matches": {
+      "name": "matches",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "player_a": {
+          "name": "player_a",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "player_b": {
+          "name": "player_b",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "race_to": {
+          "name": "race_to",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 3
+        },
+        "stake_limit_cents": {
+          "name": "stake_limit_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1000
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'open'"
+        },
+        "result_score_a": {
+          "name": "result_score_a",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_score_b": {
+          "name": "result_score_b",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "winner_rollover_in_cents": {
+          "name": "winner_rollover_in_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "winner_rollover_out_cents": {
+          "name": "winner_rollover_out_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "winner_rollover_source_match_id": {
+          "name": "winner_rollover_source_match_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "score_rollover_in_cents": {
+          "name": "score_rollover_in_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "score_rollover_out_cents": {
+          "name": "score_rollover_out_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "score_rollover_source_match_id": {
+          "name": "score_rollover_source_match_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "matches_one_active_unique": {
+          "name": "matches_one_active_unique",
+          "columns": [
+            "(1)"
+          ],
+          "isUnique": true,
+          "where": "\"matches\".\"status\" != 'settled'"
+        },
+        "matches_winner_rollover_source_unique": {
+          "name": "matches_winner_rollover_source_unique",
+          "columns": [
+            "winner_rollover_source_match_id"
+          ],
+          "isUnique": true,
+          "where": "\"matches\".\"winner_rollover_source_match_id\" IS NOT NULL"
+        },
+        "matches_score_rollover_source_unique": {
+          "name": "matches_score_rollover_source_unique",
+          "columns": [
+            "score_rollover_source_match_id"
+          ],
+          "isUnique": true,
+          "where": "\"matches\".\"score_rollover_source_match_id\" IS NOT NULL"
+        },
+        "matches_status_created_idx": {
+          "name": "matches_status_created_idx",
+          "columns": [
+            "status",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "matches_status_check": {
+          "name": "matches_status_check",
+          "value": "\"matches\".\"status\" IN ('open', 'closed', 'settled')"
+        },
+        "matches_race_to_check": {
+          "name": "matches_race_to_check",
+          "value": "\"matches\".\"race_to\" > 0"
+        },
+        "matches_stake_limit_check": {
+          "name": "matches_stake_limit_check",
+          "value": "\"matches\".\"stake_limit_cents\" > 0"
+        },
+        "matches_rollover_in_check": {
+          "name": "matches_rollover_in_check",
+          "value": "\"matches\".\"winner_rollover_in_cents\" >= 0 AND \"matches\".\"score_rollover_in_cents\" >= 0"
+        },
+        "matches_rollover_out_check": {
+          "name": "matches_rollover_out_check",
+          "value": "(\"matches\".\"winner_rollover_out_cents\" IS NULL OR \"matches\".\"winner_rollover_out_cents\" >= 0) AND (\"matches\".\"score_rollover_out_cents\" IS NULL OR \"matches\".\"score_rollover_out_cents\" >= 0)"
+        }
+      }
+    },
+    "receipt_snapshots": {
+      "name": "receipt_snapshots",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "match_id": {
+          "name": "match_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "receipt_snapshots_code_unique": {
+          "name": "receipt_snapshots_code_unique",
+          "columns": [
+            "code"
+          ],
+          "isUnique": true
+        },
+        "receipt_snapshots_active_bet_unique": {
+          "name": "receipt_snapshots_active_bet_unique",
+          "columns": [
+            "bet_id"
+          ],
+          "isUnique": true,
+          "where": "\"receipt_snapshots\".\"kind\" = 'bet' AND \"receipt_snapshots\".\"status\" = 'active'"
+        },
+        "receipt_snapshots_active_match_kind_unique": {
+          "name": "receipt_snapshots_active_match_kind_unique",
+          "columns": [
+            "match_id",
+            "kind"
+          ],
+          "isUnique": true,
+          "where": "\"receipt_snapshots\".\"bet_id\" IS NULL AND \"receipt_snapshots\".\"status\" = 'active'"
+        },
+        "receipt_snapshots_bet_revision_unique": {
+          "name": "receipt_snapshots_bet_revision_unique",
+          "columns": [
+            "bet_id",
+            "revision"
+          ],
+          "isUnique": true,
+          "where": "\"receipt_snapshots\".\"kind\" = 'bet'"
+        },
+        "receipt_snapshots_match_revision_unique": {
+          "name": "receipt_snapshots_match_revision_unique",
+          "columns": [
+            "match_id",
+            "kind",
+            "revision"
+          ],
+          "isUnique": true,
+          "where": "\"receipt_snapshots\".\"bet_id\" IS NULL"
+        },
+        "receipt_snapshots_match_created_idx": {
+          "name": "receipt_snapshots_match_created_idx",
+          "columns": [
+            "match_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "receipt_snapshots_bet_created_idx": {
+          "name": "receipt_snapshots_bet_created_idx",
+          "columns": [
+            "bet_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "receipt_snapshots_match_id_matches_id_fk": {
+          "name": "receipt_snapshots_match_id_matches_id_fk",
+          "tableFrom": "receipt_snapshots",
+          "tableTo": "matches",
+          "columnsFrom": [
+            "match_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "receipt_snapshots_kind_check": {
+          "name": "receipt_snapshots_kind_check",
+          "value": "\"receipt_snapshots\".\"kind\" IN ('bet', 'sealed', 'settled')"
+        },
+        "receipt_snapshots_status_check": {
+          "name": "receipt_snapshots_status_check",
+          "value": "\"receipt_snapshots\".\"status\" IN ('active', 'superseded', 'cancelled')"
+        },
+        "receipt_snapshots_target_check": {
+          "name": "receipt_snapshots_target_check",
+          "value": "(\"receipt_snapshots\".\"kind\" = 'bet' AND \"receipt_snapshots\".\"bet_id\" IS NOT NULL) OR (\"receipt_snapshots\".\"kind\" IN ('sealed', 'settled') AND \"receipt_snapshots\".\"bet_id\" IS NULL)"
+        },
+        "receipt_snapshots_revision_check": {
+          "name": "receipt_snapshots_revision_check",
+          "value": "\"receipt_snapshots\".\"revision\" > 0"
+        },
+        "receipt_snapshots_code_check": {
+          "name": "receipt_snapshots_code_check",
+          "value": "length(\"receipt_snapshots\".\"code\") > 0"
+        },
+        "receipt_snapshots_payload_check": {
+          "name": "receipt_snapshots_payload_check",
+          "value": "json_valid(\"receipt_snapshots\".\"payload_json\")"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {
+      "matches_one_active_unique": {
+        "columns": {
+          "(1)": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}

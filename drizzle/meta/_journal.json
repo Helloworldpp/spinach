@@ -15,6 +15,20 @@
       "when": 1786441655481,
       "tag": "0001_dear_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786458192363,
+      "tag": "0002_eminent_kate_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786461394828,
+      "tag": "0003_parched_nighthawk",
+      "breakpoints": true
     }
   ]
 }

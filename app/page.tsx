@@ -1,6 +1,11 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ReceiptArtifact,
+  RenderedReceipt,
+  renderReceipt,
+} from "./receipt-canvas";
 
 type BetMode = "winner" | "score";
 type MatchStatus = "open" | "closed" | "settled";
@@ -28,6 +33,8 @@ type Payout = {
 
 type Settlement = {
   mode: BetMode;
+  newStakeCents: number;
+  rolloverInCents: number;
   totalPoolCents: number;
   championPrizeCents: number;
   guessPoolCents: number;
@@ -48,7 +55,12 @@ type GameMatch = {
   resultScoreB: number | null;
   createdAt: string;
   settledAt?: string | null;
+  winnerRolloverInCents: number;
+  winnerRolloverOutCents: number | null;
+  scoreRolloverInCents: number;
+  scoreRolloverOutCents: number | null;
   bets: Bet[];
+  artifacts: ReceiptArtifact[];
   settlement?: Settlement[] | Record<string, Settlement> | null;
   settlements?: Settlement[] | null;
 };
@@ -60,7 +72,19 @@ type GameSnapshot = {
 
 type Notice = { type: "success" | "error"; message: string } | null;
 
+type DeleteTarget =
+  | { kind: "bet"; match: GameMatch; bet: Bet }
+  | { kind: "match"; match: GameMatch };
+
+type ActionResponse = GameSnapshot & {
+  ok?: boolean;
+  artifact?: ReceiptArtifact;
+  error?: string;
+};
+
 const EMPTY_SNAPSHOT: GameSnapshot = { activeMatch: null, history: [] };
+const MIN_BET_CENTS = 100;
+const MAX_BET_CENTS = 1000;
 
 const MODE_COPY: Record<
   BetMode,
@@ -82,6 +106,18 @@ const STATUS_COPY: Record<MatchStatus, string> = {
   open: "开放下注",
   closed: "已封盘",
   settled: "已结算",
+};
+
+const ARTIFACT_KIND_COPY: Record<ReceiptArtifact["kind"], string> = {
+  bet: "下注票据",
+  sealed: "封盘快照",
+  settled: "结算票据",
+};
+
+const ARTIFACT_STATUS_COPY: Record<ReceiptArtifact["status"], string> = {
+  active: "有效",
+  superseded: "已更新",
+  cancelled: "已取消",
 };
 
 function formatMoney(cents: number) {
@@ -122,6 +158,25 @@ function settlementFor(match: GameMatch, mode: BetMode) {
   return candidates[mode] ?? null;
 }
 
+function rolloverInFor(match: GameMatch, mode: BetMode) {
+  return mode === "winner"
+    ? match.winnerRolloverInCents ?? 0
+    : match.scoreRolloverInCents ?? 0;
+}
+
+function rolloverOutFor(match: GameMatch, mode: BetMode) {
+  const recorded =
+    mode === "winner" ? match.winnerRolloverOutCents : match.scoreRolloverOutCents;
+  return recorded ?? settlementFor(match, mode)?.rolloverCents ?? null;
+}
+
+function normalizeBettorName(value: string) {
+  return value
+    .replace(/\s+/gu, "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN");
+}
+
 function totalForMode(match: GameMatch, mode: BetMode) {
   return match.bets
     .filter((bet) => bet.mode === mode)
@@ -133,6 +188,35 @@ function betPrediction(bet: Bet, match: GameMatch) {
     return bet.winnerPick === "A" ? match.playerA : match.playerB;
   }
   return `${bet.predictedScoreA ?? "–"} : ${bet.predictedScoreB ?? "–"}`;
+}
+
+function sameBetSelection(left: Bet, right: Bet) {
+  if (left.mode !== right.mode) return false;
+  if (left.mode === "winner") return left.winnerPick === right.winnerPick;
+  return (
+    left.predictedScoreA === right.predictedScoreA &&
+    left.predictedScoreB === right.predictedScoreB
+  );
+}
+
+function estimateSealedPayout(match: GameMatch, bet: Bet) {
+  const modeBets = match.bets.filter((candidate) => candidate.mode === bet.mode);
+  const newStakeCents = modeBets.reduce(
+    (sum, candidate) => sum + candidate.amountCents,
+    0,
+  );
+  const championPrizeCents =
+    bet.mode === "winner" ? Math.round(newStakeCents * 0.2) : 0;
+  const distributableCents =
+    newStakeCents + rolloverInFor(match, bet.mode) - championPrizeCents;
+  const selectionStakeCents = modeBets
+    .filter((candidate) => sameBetSelection(candidate, bet))
+    .reduce((sum, candidate) => sum + candidate.amountCents, 0);
+
+  if (selectionStakeCents <= 0) return 0;
+  return Math.round(
+    (distributableCents * bet.amountCents) / selectionStakeCents,
+  );
 }
 
 function EmptyMatch({ onCreate }: { onCreate: () => void }) {
@@ -165,12 +249,20 @@ export default function Home() {
   const [showNewMatch, setShowNewMatch] = useState(false);
   const [showSettle, setShowSettle] = useState(false);
   const [settleScore, setSettleScore] = useState("");
+  const [settlePassword, setSettlePassword] = useState("");
+  const [statusTarget, setStatusTarget] = useState<"open" | "closed" | null>(null);
+  const [statusPassword, setStatusPassword] = useState("");
+  const [receiptArtifact, setReceiptArtifact] = useState<ReceiptArtifact | null>(null);
+  const [renderedReceipt, setRenderedReceipt] = useState<RenderedReceipt | null>(null);
+  const [receiptError, setReceiptError] = useState("");
+  const [archiveMatchId, setArchiveMatchId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deletePassword, setDeletePassword] = useState("");
   const [newMatch, setNewMatch] = useState({
     title: "好友台球对决",
     playerA: "侯良玉",
     playerB: "杜志豪",
     raceTo: "3",
-    stakeLimit: "10",
   });
 
   const match = snapshot.activeMatch;
@@ -198,13 +290,58 @@ export default function Home() {
   }, [loadGame]);
 
   useEffect(() => {
-    if (!showNewMatch && !showSettle) return;
+    if (
+      !showNewMatch &&
+      !showSettle &&
+      !statusTarget &&
+      !receiptArtifact &&
+      archiveMatchId === null &&
+      !deleteTarget
+    ) {
+      return;
+    }
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [showNewMatch, showSettle]);
+  }, [showNewMatch, showSettle, statusTarget, receiptArtifact, archiveMatchId, deleteTarget]);
+
+  useEffect(() => {
+    if (!receiptArtifact) return;
+    let disposed = false;
+    let generated: RenderedReceipt | null = null;
+    void renderReceipt(receiptArtifact)
+      .then((result) => {
+        if (disposed) {
+          URL.revokeObjectURL(result.url);
+          return;
+        }
+        generated = result;
+        setRenderedReceipt(result);
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          setReceiptError(error instanceof Error ? error.message : "票据图片生成失败");
+        }
+      });
+    return () => {
+      disposed = true;
+      if (generated) URL.revokeObjectURL(generated.url);
+    };
+  }, [receiptArtifact]);
+
+  function openReceipt(artifact: ReceiptArtifact) {
+    setRenderedReceipt(null);
+    setReceiptError("");
+    setReceiptArtifact(artifact);
+  }
+
+  function closeReceipt() {
+    setReceiptArtifact(null);
+    setRenderedReceipt(null);
+    setReceiptError("");
+  }
 
   useEffect(() => {
     if (!notice) return;
@@ -214,10 +351,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!match) return;
-    const timer = window.setTimeout(
-      () => setAmount(String(Math.min(1000, match.stakeLimitCents) / 100)),
-      0,
-    );
+    const timer = window.setTimeout(() => setAmount("10"), 0);
     return () => window.clearTimeout(timer);
   }, [match]);
 
@@ -225,7 +359,7 @@ export default function Home() {
     actionName: string,
     payload: Record<string, unknown>,
     successMessage: string,
-  ) {
+  ): Promise<ActionResponse | null> {
     setBusyAction(actionName);
     setNotice(null);
     try {
@@ -234,17 +368,18 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = (await response.json()) as { error?: string };
+      const data = (await response.json()) as ActionResponse;
       if (!response.ok) throw new Error(data.error || "操作没有完成");
       await loadGame();
       setNotice({ type: "success", message: successMessage });
-      return true;
+      if (data.artifact) openReceipt(data.artifact);
+      return data;
     } catch (error) {
       setNotice({
         type: "error",
         message: error instanceof Error ? error.message : "操作没有完成",
       });
-      return false;
+      return null;
     } finally {
       setBusyAction("");
     }
@@ -289,7 +424,6 @@ export default function Home() {
         playerA: match.playerA,
         playerB: match.playerB,
         raceTo: String(match.raceTo),
-        stakeLimit: String(match.stakeLimitCents / 100),
       });
     }
     setShowNewMatch(true);
@@ -303,14 +437,14 @@ export default function Home() {
       setNotice({ type: "error", message: "先填写下注人姓名" });
       return;
     }
-    if (!Number.isFinite(amountCents) || amountCents <= 0) {
-      setNotice({ type: "error", message: "请输入有效的下注金额" });
+    if (!Number.isFinite(amountCents) || amountCents < MIN_BET_CENTS) {
+      setNotice({ type: "error", message: "单注最低为 ¥1" });
       return;
     }
-    if (amountCents > match.stakeLimitCents) {
+    if (amountCents > MAX_BET_CENTS) {
       setNotice({
         type: "error",
-        message: `本局单注上限为 ${formatMoney(match.stakeLimitCents)}`,
+        message: "单注最高为 ¥10",
       });
       return;
     }
@@ -361,28 +495,97 @@ export default function Home() {
     setNotice({ type: "success", message: "已带入这条记录，保存后会直接更新" });
   }
 
-  async function deleteBet(bet: Bet) {
-    if (!window.confirm(`确认删除 ${bet.bettorName} 的这笔下注吗？`)) return;
-    await runAction(
-      "deleteBet",
-      { action: "deleteBet", matchId: bet.matchId, betId: bet.id },
-      "下注记录已删除",
-    );
+  function askDeleteBet(targetMatch: GameMatch, bet: Bet) {
+    setDeletePassword("");
+    setDeleteTarget({ kind: "bet", match: targetMatch, bet });
   }
 
-  async function changeStatus(status: "open" | "closed") {
-    if (!match) return;
-    await runAction(
-      "setStatus",
-      { action: "setStatus", matchId: match.id, status },
-      status === "closed" ? "本局已封盘" : "本局已重新开放",
+  function askDeleteMatch(targetMatch: GameMatch) {
+    setDeletePassword("");
+    setDeleteTarget({ kind: "match", match: targetMatch });
+  }
+
+  function closeDeleteDialog() {
+    setDeleteTarget(null);
+    setDeletePassword("");
+  }
+
+  async function confirmDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deleteTarget || !deletePassword) return;
+    const deletingBet = deleteTarget.kind === "bet";
+    const result = await runAction(
+      deletingBet ? "deleteBet" : "deleteMatch",
+      deletingBet
+        ? { action: "deleteBet", betId: deleteTarget.bet.id, password: deletePassword }
+        : { action: "deleteMatch", matchId: deleteTarget.match.id, password: deletePassword },
+      deletingBet ? "下注记录已永久删除" : "该场比赛及关联记录已永久删除",
     );
+    if (result) {
+      closeDeleteDialog();
+      setArchiveMatchId(null);
+    }
+  }
+
+  function downloadReceipt() {
+    if (!renderedReceipt) return;
+    const link = document.createElement("a");
+    link.href = renderedReceipt.url;
+    link.download = renderedReceipt.filename;
+    link.click();
+  }
+
+  async function copyReceipt() {
+    if (!renderedReceipt) return;
+    if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+      setNotice({
+        type: "error",
+        message: "当前浏览器或局域网环境不支持复制图片，请使用“下载图片”。",
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": renderedReceipt.blob }),
+      ]);
+      setNotice({ type: "success", message: "票据图片已复制" });
+    } catch {
+      setNotice({
+        type: "error",
+        message: "浏览器未允许复制图片，请使用“下载图片”。",
+      });
+    }
+  }
+
+  function askChangeStatus(status: "open" | "closed") {
+    setStatusPassword("");
+    setStatusTarget(status);
+  }
+
+  function closeStatusDialog() {
+    setStatusTarget(null);
+    setStatusPassword("");
+  }
+
+  async function changeStatus(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!match || !statusTarget || !statusPassword) return;
+    const changed = await runAction(
+      "setStatus",
+      {
+        action: "setStatus",
+        matchId: match.id,
+        status: statusTarget,
+        password: statusPassword,
+      },
+      statusTarget === "closed" ? "本局已封盘" : "本局已重新开放",
+    );
+    if (changed) closeStatusDialog();
   }
 
   async function createMatch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const raceTo = Number(newMatch.raceTo);
-    const stakeLimitCents = Math.round(Number(newMatch.stakeLimit) * 100);
     const created = await runAction(
       "createMatch",
       {
@@ -391,7 +594,6 @@ export default function Home() {
         playerA: newMatch.playerA.trim(),
         playerB: newMatch.playerB.trim(),
         raceTo,
-        stakeLimitCents,
       },
       "新对局已经开好",
     );
@@ -403,16 +605,17 @@ export default function Home() {
 
   async function settleMatch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!match || !settleScore) return;
+    if (!match || !settleScore || !settlePassword) return;
     const [scoreA, scoreB] = settleScore.split(":").map(Number);
     const settled = await runAction(
       "settle",
-      { action: "settle", matchId: match.id, scoreA, scoreB },
+      { action: "settle", matchId: match.id, scoreA, scoreB, password: settlePassword },
       "赛果和派奖结果已保存",
     );
     if (settled) {
       setShowSettle(false);
       setSettleScore("");
+      setSettlePassword("");
     }
   }
 
@@ -447,17 +650,88 @@ export default function Home() {
     );
   }
 
-  const canCreateMatch = match.status === "settled" || match.bets.length === 0;
+  const canCreateMatch =
+    match.status === "settled" ||
+    (match.bets.length === 0 && (match.artifacts?.length ?? 0) === 0);
+  const archiveMatch =
+    archiveMatchId === match.id
+      ? match
+      : snapshot.history.find((item) => item.id === archiveMatchId) ?? null;
+  const latestMatchId = Math.max(match.id, ...snapshot.history.map((item) => item.id));
   const allPool = match.bets.reduce((sum, bet) => sum + bet.amountCents, 0);
-  const champion =
+  const championSide: Side | null =
     match.status === "settled" && match.resultScoreA !== null && match.resultScoreB !== null
       ? match.resultScoreA > match.resultScoreB
-        ? match.playerA
-        : match.playerB
+        ? "A"
+        : "B"
       : null;
+  const champion =
+    championSide === "A"
+      ? match.playerA
+      : championSide === "B"
+        ? match.playerB
+        : null;
   const payoutsById = new Map(
     (modeSettlement?.payouts ?? []).map((payout) => [payout.betId, payout]),
   );
+  const modeNewStakeCents = modeSettlement?.newStakeCents ?? poolTotal;
+  const modeRolloverInCents =
+    modeSettlement?.rolloverInCents ?? rolloverInFor(match, mode);
+  const modeCurrentTotalCents = modeNewStakeCents + modeRolloverInCents;
+  const modeChampionPrizeCents =
+    mode === "winner"
+      ? modeSettlement?.championPrizeCents ?? Math.round(modeNewStakeCents * 0.2)
+      : 0;
+  const modeDistributableCents =
+    mode === "winner"
+      ? modeSettlement?.totalPoolCents ??
+        modeCurrentTotalCents - modeChampionPrizeCents
+      : modeSettlement?.totalPoolCents ?? modeCurrentTotalCents;
+  const normalizedProspectiveName = normalizeBettorName(bettorName);
+  const existingScoreBet = normalizedProspectiveName
+    ? match.bets.find(
+        (bet) =>
+          bet.mode === "score" &&
+          normalizeBettorName(bet.bettorName) === normalizedProspectiveName,
+      )
+    : undefined;
+  const prospectiveAmountCents = Math.round(Number(amount) * 100);
+  const hasValidProspectiveAmount =
+    Number.isFinite(prospectiveAmountCents) &&
+    prospectiveAmountCents >= MIN_BET_CENTS &&
+    prospectiveAmountCents <= MAX_BET_CENTS;
+  const scoreNewStakeWithoutExisting =
+    totalForMode(match, "score") - (existingScoreBet?.amountCents ?? 0);
+  const scorePreviewMatch = match;
+
+  function projectedScoreReturn(scoreA: number, scoreB: number) {
+    if (!hasValidProspectiveAmount) return null;
+    const currentStakeForScore = scorePreviewMatch.bets
+      .filter(
+        (bet) =>
+          bet.mode === "score" &&
+          bet.predictedScoreA === scoreA &&
+          bet.predictedScoreB === scoreB,
+      )
+      .reduce((sum, bet) => sum + bet.amountCents, 0);
+    const replacedStakeForScore =
+      existingScoreBet?.predictedScoreA === scoreA &&
+      existingScoreBet.predictedScoreB === scoreB
+        ? existingScoreBet.amountCents
+        : 0;
+    const adjustedStakeForScore =
+      currentStakeForScore - replacedStakeForScore + prospectiveAmountCents;
+    const adjustedNewStakeCents = scoreNewStakeWithoutExisting + prospectiveAmountCents;
+    const availablePoolCents =
+      rolloverInFor(scorePreviewMatch, "score") + adjustedNewStakeCents;
+    const payoutCents = Math.round(
+      (availablePoolCents * prospectiveAmountCents) / adjustedStakeForScore,
+    );
+    return {
+      payoutCents,
+      multiple: availablePoolCents / adjustedStakeForScore,
+    };
+  }
 
   function renderNewMatchDialog() {
     return (
@@ -479,7 +753,9 @@ export default function Home() {
           </button>
           <p className="eyebrow">NEW MATCH</p>
           <h2 id="new-match-title">新开一局</h2>
-          <p className="modal-intro">两种玩法会在同一场比赛下分别记池。</p>
+          <p className="modal-intro">
+            两种玩法分别记池；上一场未派出的金额会自动进入同玩法的新一局。
+          </p>
           <form className="modal-form" onSubmit={createMatch}>
             <label className="field full-field">
               <span>对局名称</span>
@@ -528,24 +804,10 @@ export default function Home() {
                 }
               />
             </label>
-            <label className="field">
-              <span>单注上限（元）</span>
-              <input
-                type="number"
-                min="0.01"
-                max="10000"
-                step="0.01"
-                inputMode="decimal"
-                value={newMatch.stakeLimit}
-                required
-                onChange={(event) =>
-                  setNewMatch((value) => ({
-                    ...value,
-                    stakeLimit: event.target.value,
-                  }))
-                }
-              />
-            </label>
+            <div className="field">
+              <span>单注金额</span>
+              <strong>¥1 — ¥10</strong>
+            </div>
             <button
               className="primary-button full-field"
               type="submit"
@@ -573,13 +835,18 @@ export default function Home() {
           </span>
         </a>
         <div className="topbar-actions">
-          <span className="record-only">仅作记录 · 不涉及支付</span>
           <button
             className="outline-button compact-button"
             type="button"
             onClick={openNewMatchDialog}
             disabled={!canCreateMatch}
-            title={canCreateMatch ? "新开一局" : "请先结算当前对局"}
+            title={
+              canCreateMatch
+                ? "新开一局"
+                : match.bets.length === 0
+                  ? "当前空局已有历史票据，请先删除本场"
+                  : "请先结算当前对局"
+            }
           >
             ＋ 新开一局
           </button>
@@ -600,7 +867,15 @@ export default function Home() {
           </div>
 
           <div className="versus-stage">
-            <div className="player player-a">
+            <div
+              className={`player player-a ${
+                championSide === "A"
+                  ? "match-winner"
+                  : championSide === "B"
+                    ? "match-runner-up"
+                    : ""
+              }`}
+            >
               <span className="player-side">BLUE · A</span>
               <div className="player-avatar" aria-hidden="true">
                 {match.playerA.slice(0, 1)}
@@ -619,7 +894,15 @@ export default function Home() {
               )}
               <small>抢 {match.raceTo} · 先胜者赢</small>
             </div>
-            <div className="player player-b">
+            <div
+              className={`player player-b ${
+                championSide === "B"
+                  ? "match-winner"
+                  : championSide === "A"
+                    ? "match-runner-up"
+                    : ""
+              }`}
+            >
               <span className="player-side">RED · B</span>
               <div className="player-avatar" aria-hidden="true">
                 {match.playerB.slice(0, 1)}
@@ -628,18 +911,43 @@ export default function Home() {
             </div>
           </div>
 
+          {match.status === "settled" && champion && (
+            <div
+              className="champion-reveal"
+              role="status"
+              aria-label={`冠军揭晓：${champion}`}
+            >
+              <span className="champion-trophy" aria-hidden="true">🏆</span>
+              <div className="champion-copy">
+                <small>CHAMPION · 冠军揭晓</small>
+                <strong>{champion}</strong>
+              </div>
+              <div className="champion-result">
+                <span>最终比分</span>
+                <b>{match.resultScoreA} : {match.resultScoreB}</b>
+              </div>
+            </div>
+          )}
+
           <div className="hero-footer">
             <div className="hero-meta">
-              <span>单注上限 <strong>{formatMoney(match.stakeLimitCents)}</strong></span>
+              <span>单注范围 <strong>¥1 — ¥10</strong></span>
               <span>总记录 <strong>{match.bets.length}</strong> 笔</span>
               <span>总下注 <strong>{formatMoney(allPool)}</strong></span>
             </div>
             <div className="match-actions">
+              <button
+                type="button"
+                className="outline-button receipt-archive-button"
+                onClick={() => setArchiveMatchId(match.id)}
+              >
+                票据档案 <span>{match.artifacts?.length ?? 0}</span>
+              </button>
               {match.status === "open" && (
                 <button
                   type="button"
                   className="outline-button"
-                  onClick={() => void changeStatus("closed")}
+                  onClick={() => askChangeStatus("closed")}
                   disabled={busyAction === "setStatus"}
                 >
                   封盘
@@ -650,7 +958,7 @@ export default function Home() {
                   <button
                     type="button"
                     className="ghost-button"
-                    onClick={() => void changeStatus("open")}
+                    onClick={() => askChangeStatus("open")}
                     disabled={busyAction === "setStatus"}
                   >
                     重新开放
@@ -658,18 +966,127 @@ export default function Home() {
                   <button
                     type="button"
                     className="primary-button small-button"
-                    onClick={() => setShowSettle(true)}
+                    onClick={() => {
+                      setSettlePassword("");
+                      setShowSettle(true);
+                    }}
                   >
                     录入赛果
                   </button>
                 </>
               )}
-              {match.status === "settled" && champion && (
-                <span className="champion-chip">冠军 · {champion}</span>
-              )}
+              <button
+                type="button"
+                className="ghost-button danger-button"
+                onClick={() => askDeleteMatch(match)}
+                disabled={match.id !== latestMatchId}
+                title={
+                  match.id === latestMatchId ? "永久删除这场比赛" : "需先删除更新的比赛"
+                }
+              >
+                删除本场
+              </button>
             </div>
           </div>
         </section>
+
+        {match.status !== "open" && (
+          <section className="sealed-summary" aria-labelledby="sealed-summary-title">
+            <div className="sealed-summary-heading">
+              <div>
+                <p className="eyebrow">SEALED BET SUMMARY</p>
+                <h2 id="sealed-summary-title">封盘下注汇总</h2>
+              </div>
+              <div className="sealed-summary-note">
+                <strong>{match.bets.length} 笔下注 · {formatMoney(allPool)}</strong>
+                <span>预估奖金按封盘奖池计算，最终以赛果结算为准</span>
+              </div>
+            </div>
+
+            <div className="sealed-summary-grid">
+              {(["winner", "score"] as BetMode[]).map((summaryMode) => {
+                const summaryBets = match.bets.filter((bet) => bet.mode === summaryMode);
+                const summaryStake = summaryBets.reduce(
+                  (sum, bet) => sum + bet.amountCents,
+                  0,
+                );
+                const summaryRollover = rolloverInFor(match, summaryMode);
+                const summaryChampionPrize =
+                  summaryMode === "winner" ? Math.round(summaryStake * 0.2) : 0;
+                const summaryPool =
+                  summaryStake + summaryRollover - summaryChampionPrize;
+
+                return (
+                  <article
+                    className={`sealed-summary-card sealed-summary-${summaryMode}`}
+                    key={summaryMode}
+                  >
+                    <header>
+                      <div>
+                        <span>{summaryMode === "winner" ? "01" : "02"}</span>
+                        <h3>{MODE_COPY[summaryMode].title}下注汇总</h3>
+                      </div>
+                      <p>
+                        <strong>{summaryBets.length} 笔</strong>
+                        <span>可分奖池 {formatMoney(summaryPool)}</span>
+                      </p>
+                    </header>
+
+                    <div className="sealed-table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>下注人</th>
+                            <th>选择</th>
+                            <th>下注金额</th>
+                            <th>预估奖金</th>
+                            <th>预估净赢</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {summaryBets.length === 0 ? (
+                            <tr className="sealed-empty-row">
+                              <td colSpan={5}>本玩法没有下注</td>
+                            </tr>
+                          ) : (
+                            summaryBets.map((bet) => {
+                              const estimatedPayout = estimateSealedPayout(match, bet);
+                              return (
+                                <tr key={bet.id}>
+                                  <td><strong>{bet.bettorName}</strong></td>
+                                  <td>{betPrediction(bet, match)}</td>
+                                  <td>{formatMoney(bet.amountCents)}</td>
+                                  <td className="estimated-payout">
+                                    {formatMoney(estimatedPayout)}
+                                  </td>
+                                  <td className={estimatedPayout >= bet.amountCents ? "estimated-profit" : ""}>
+                                    {formatMoney(estimatedPayout - bet.amountCents)}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={2}>合计</td>
+                            <td>{formatMoney(summaryStake)}</td>
+                            <td colSpan={2}>
+                              滚存 {formatMoney(summaryRollover)}
+                              {summaryMode === "winner" && (
+                                <> · 冠军奖金 {formatMoney(summaryChampionPrize)}</>
+                              )}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <nav className="mode-switch" aria-label="下注模式">
           {(Object.keys(MODE_COPY) as BetMode[]).map((item) => (
@@ -753,6 +1170,12 @@ export default function Home() {
                         const value = `${choice.a}:${choice.b}`;
                         const selected = scorePick === value;
                         const winningSide = choice.a > choice.b ? "A" : "B";
+                        const projection = projectedScoreReturn(choice.a, choice.b);
+                        const projectionCopy = projection
+                          ? `预计 ${projection.multiple.toFixed(2)}× · ${formatMoney(
+                              projection.payoutCents,
+                            )}`
+                          : "输入有效金额查看预计";
                         return (
                           <button
                             key={value}
@@ -761,11 +1184,15 @@ export default function Home() {
                               selected ? "selected" : ""
                             }`}
                             aria-pressed={selected}
+                            aria-label={`预测比分 ${choice.a} 比 ${choice.b}，${projectionCopy}`}
                             onClick={() => setScorePick(value)}
                           >
-                            <strong>{choice.a}</strong>
-                            <span>:</span>
-                            <strong>{choice.b}</strong>
+                            <span className="score-value">
+                              <strong>{choice.a}</strong>
+                              <i>:</i>
+                              <strong>{choice.b}</strong>
+                            </span>
+                            <small>{projectionCopy}</small>
                           </button>
                         );
                       })}
@@ -781,8 +1208,8 @@ export default function Home() {
                       <input
                         aria-label="下注金额（元）"
                         type="number"
-                        min="0.01"
-                        max={match.stakeLimitCents / 100}
+                        min="1"
+                        max="10"
                         step="0.01"
                         inputMode="decimal"
                         value={amount}
@@ -790,10 +1217,10 @@ export default function Home() {
                       />
                     </div>
                     <div className="amount-chips" aria-label="快捷金额">
-                      {[100, 500, match.stakeLimitCents]
+                      {[100, 500, 1000]
                         .filter(
                           (value, index, values) =>
-                            value <= match.stakeLimitCents && values.indexOf(value) === index,
+                            values.indexOf(value) === index,
                         )
                         .map((value) => (
                           <button
@@ -815,7 +1242,7 @@ export default function Home() {
                   disabled={busyAction === "addBet"}
                 >
                   <span>{busyAction === "addBet" ? "正在保存…" : "记下这注"}</span>
-                  <small>单注不超过 {formatMoney(match.stakeLimitCents)}</small>
+                  <small>单注 ¥1 — ¥10</small>
                 </button>
               </form>
             )}
@@ -835,38 +1262,82 @@ export default function Home() {
               <span className="live-dot"><i /> 实时汇总</span>
             </div>
 
-            <div className="stats-row">
+            <div
+              className="stats-row"
+              role="group"
+              aria-label={`${MODE_COPY[mode].title}奖池汇总`}
+            >
               <div>
-                <span>本玩法奖池</span>
-                <strong>{formatMoney(poolTotal)}</strong>
+                <span>本局新增</span>
+                <strong>{formatMoney(modeNewStakeCents)}</strong>
               </div>
               <div>
-                <span>下注人数</span>
-                <strong>{uniqueBettors}<small> 人</small></strong>
+                <span>上局滚存</span>
+                <strong>{formatMoney(modeRolloverInCents)}</strong>
               </div>
-              <div className="popular-stat">
-                <span>当前热门</span>
-                <strong>{popularPick}</strong>
+              <div className="current-pool-stat">
+                <span>当前总池</span>
+                <strong>{formatMoney(modeCurrentTotalCents)}</strong>
               </div>
             </div>
 
-            <div className="pool-card">
-              <div className="pool-bar" aria-label="20% 冠军奖金，80% 竞猜奖池">
-                <span style={{ width: "20%" }}>20%</span>
-                <span style={{ width: "80%" }}>80%</span>
+            <div className={`pool-card pool-card-${mode}`}>
+              <div className="pool-card-heading">
+                <span>{mode === "winner" ? "胜负池分配" : "比分池分配"}</span>
+                <strong>
+                  {mode === "winner" ? "新注 20 / 80 · 滚存全入竞猜" : "100% 归精确命中者"}
+                </strong>
               </div>
-              <div className="pool-legend">
+              <div
+                className="pool-flow"
+                role="group"
+                aria-label="本局新增加上上局滚存等于当前总池"
+              >
                 <div>
-                  <i className="legend-gold" />
-                  <span>冠军奖金</span>
-                  <strong>{formatMoney(Math.round(poolTotal * 0.2))}</strong>
+                  <span>本局新增</span>
+                  <strong>{formatMoney(modeNewStakeCents)}</strong>
                 </div>
-                <div>
-                  <i className="legend-blue" />
-                  <span>竞猜奖池</span>
-                  <strong>{formatMoney(poolTotal - Math.round(poolTotal * 0.2))}</strong>
+                <b aria-hidden="true">＋</b>
+                <div className="rollover-flow-item">
+                  <span>上局滚存</span>
+                  <strong>{formatMoney(modeRolloverInCents)}</strong>
+                </div>
+                <b aria-hidden="true">＝</b>
+                <div className="total-flow-item">
+                  <span>当前总池</span>
+                  <strong>{formatMoney(modeCurrentTotalCents)}</strong>
                 </div>
               </div>
+              {mode === "winner" ? (
+                <div className="pool-allocation">
+                  <div>
+                    <span>冠军奖金</span>
+                    <strong>{formatMoney(modeChampionPrizeCents)}</strong>
+                    <small>只取本局新增的 20%</small>
+                  </div>
+                  <div className="featured-allocation">
+                    <span>当前可分奖池</span>
+                    <strong>{formatMoney(modeDistributableCents)}</strong>
+                    <small>本局新增的 80% ＋ 全部胜负滚存</small>
+                  </div>
+                </div>
+              ) : (
+                <div className="score-allocation">
+                  <div>
+                    <span>当前可分奖池</span>
+                    <strong>{formatMoney(modeDistributableCents)}</strong>
+                  </div>
+                  <p>
+                    本局比分下注与比分滚存全部参与分配，不抽取冠军奖金；若只有一人下注且没有滚存，
+                    命中时为 1.00×，即返还本人下注。
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="ledger-insights" role="group" aria-label="本玩法下注概况">
+              <span>下注人数 <strong>{uniqueBettors} 人</strong></span>
+              <span>当前热门 <strong>{popularPick}</strong></span>
             </div>
 
             {match.status === "settled" && modeSettlement && (
@@ -877,20 +1348,40 @@ export default function Home() {
                 </div>
                 <div className="settlement-grid">
                   <div>
-                    <span>冠军奖金</span>
-                    <b>{formatMoney(modeSettlement.championPrizeCents)}</b>
+                    <span>本局新增</span>
+                    <b>{formatMoney(modeSettlement.newStakeCents)}</b>
                   </div>
                   <div>
-                    <span>命中本金</span>
-                    <b>{formatMoney(modeSettlement.totalCorrectStakeCents)}</b>
+                    <span>上局滚存 · 带入</span>
+                    <b>{formatMoney(modeSettlement.rolloverInCents)}</b>
                   </div>
                   <div>
-                    <span>{modeSettlement.rolloverCents > 0 ? "无人命中 · 待滚存" : "已派竞猜奖池"}</span>
-                    <b>{formatMoney(
-                      modeSettlement.rolloverCents > 0
-                        ? modeSettlement.rolloverCents
-                        : modeSettlement.guessPoolCents,
-                    )}</b>
+                    <span>可分奖池</span>
+                    <b>{formatMoney(modeSettlement.totalPoolCents)}</b>
+                  </div>
+                  <div>
+                    <span>{mode === "winner" ? "冠军奖金 · 新注20%" : "精确命中本金"}</span>
+                    <b>
+                      {formatMoney(
+                        mode === "winner"
+                          ? modeSettlement.championPrizeCents
+                          : modeSettlement.totalCorrectStakeCents,
+                      )}
+                    </b>
+                  </div>
+                  <div>
+                    <span>{mode === "winner" ? "已派胜负奖池" : "已派比分奖池"}</span>
+                    <b>
+                      {formatMoney(
+                        modeSettlement.totalCorrectStakeCents > 0
+                          ? modeSettlement.guessPoolCents
+                          : 0,
+                      )}
+                    </b>
+                  </div>
+                  <div className={modeSettlement.rolloverCents > 0 ? "rollover-out" : ""}>
+                    <span>滚入下局</span>
+                    <b>{formatMoney(modeSettlement.rolloverCents)}</b>
                   </div>
                 </div>
               </div>
@@ -912,6 +1403,11 @@ export default function Home() {
                 currentBets.map((bet) => {
                   const payout = payoutsById.get(bet.id);
                   const isCorrect = Boolean(payout);
+                  const showFinalScoreReturn =
+                    match.status === "settled" && bet.mode === "score";
+                  const finalScorePayoutCents = payout?.payoutCents ?? 0;
+                  const finalScoreMultiple =
+                    bet.amountCents > 0 ? finalScorePayoutCents / bet.amountCents : 0;
                   return (
                     <div
                       className={`bet-row bet-${bet.mode} ${
@@ -939,25 +1435,53 @@ export default function Home() {
                         <strong>{betPrediction(bet, match)}</strong>
                       </div>
                       <div className="bet-money">
-                        <span>{match.status === "settled" && isCorrect ? "应得" : "下注"}</span>
+                        <span>
+                          {showFinalScoreReturn
+                            ? "最终应得"
+                            : match.status === "settled" && isCorrect
+                              ? "应得"
+                              : "下注"}
+                        </span>
                         <strong>{formatMoney(
-                          match.status === "settled" && isCorrect
+                          showFinalScoreReturn
+                            ? finalScorePayoutCents
+                            : match.status === "settled" && isCorrect
                             ? payout?.payoutCents ?? 0
                             : bet.amountCents,
                         )}</strong>
+                        {showFinalScoreReturn && (
+                          <small className="final-return-multiple">
+                            最终 {finalScoreMultiple.toFixed(2)}×
+                          </small>
+                        )}
                       </div>
-                      {match.status === "open" && (
-                        <div className="row-actions">
+                      <div className="row-actions">
+                        {match.status === "open" && (
                           <button type="button" onClick={() => editBet(bet)}>编辑</button>
+                        )}
+                        {match.artifacts?.some((artifact) => artifact.betId === bet.id) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const artifact = match.artifacts.find(
+                                (entry) => entry.betId === bet.id,
+                              );
+                              if (artifact) openReceipt(artifact);
+                            }}
+                          >
+                            票据
+                          </button>
+                        )}
+                        {match.status === "open" && (
                           <button
                             type="button"
                             className="danger-link"
-                            onClick={() => void deleteBet(bet)}
+                            onClick={() => askDeleteBet(match, bet)}
                           >
                             删除
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -974,19 +1498,19 @@ export default function Home() {
           <div className="rule-grid">
             <div className="rule-item">
               <span>01</span>
-              <p><strong>公开下注</strong>每人每种玩法一注，同名保存会直接更新。</p>
+              <p><strong>两个独立奖池</strong>胜负与比分分别记账、分别派奖，资金不会互相补充。</p>
             </div>
             <div className="rule-item">
               <span>02</span>
-              <p><strong>20% 冠军奖金</strong>从各玩法奖池中，直接记给获胜选手。</p>
+              <p><strong>胜负滚存链</strong>本局胜负新注的 20% 给冠军；其余 80% 加上胜负滚存，由猜中胜者的人分配。</p>
             </div>
             <div className="rule-item">
               <span>03</span>
-              <p><strong>80% 竞猜奖池</strong>按命中者的下注金额比例进行分配。</p>
+              <p><strong>比分滚存链</strong>本局比分下注加上比分滚存，100% 由精确命中最终比分的人分配，不抽冠军奖。</p>
             </div>
             <div className="rule-item">
               <span>04</span>
-              <p><strong>没人猜中</strong>系统标记待滚存，方便下一场继续核对。</p>
+              <p><strong>自动滚入下局</strong>某玩法无人命中时，其可分奖池只进入下一场的同玩法，直到有人命中。</p>
             </div>
           </div>
         </section>
@@ -998,13 +1522,15 @@ export default function Home() {
                 <p className="eyebrow">MATCH ARCHIVE</p>
                 <h2 id="history-title">往期对局</h2>
               </div>
-              <span>所有记录保存在站点数据库中</span>
+              <span>所有比赛保存在本机数据库中</span>
             </div>
             <div className="history-list">
               {snapshot.history
                 .filter((item) => item.id !== match.id)
                 .map((item) => {
                   const total = item.bets.reduce((sum, bet) => sum + bet.amountCents, 0);
+                  const winnerRolloverOut = rolloverOutFor(item, "winner");
+                  const scoreRolloverOut = rolloverOutFor(item, "score");
                   return (
                     <details className="history-card" key={item.id}>
                       <summary>
@@ -1019,11 +1545,129 @@ export default function Home() {
                         </div>
                       </summary>
                       <div className="history-detail">
-                        <p>{item.title} · 抢 {item.raceTo}</p>
-                        <div>
-                          <span>胜负局 {item.bets.filter((bet) => bet.mode === "winner").length} 注</span>
-                          <span>猜比分 {item.bets.filter((bet) => bet.mode === "score").length} 注</span>
-                          <span>合计 {item.bets.length} 笔</span>
+                        <div className="history-detail-top">
+                          <p>{item.title} · 抢 {item.raceTo}</p>
+                          <div className="history-tools">
+                            <div className="history-counts">
+                              <span>胜负局 {item.bets.filter((bet) => bet.mode === "winner").length} 注</span>
+                              <span>猜比分 {item.bets.filter((bet) => bet.mode === "score").length} 注</span>
+                              <span>合计 {item.bets.length} 笔</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="archive-inline-button"
+                              onClick={() => setArchiveMatchId(item.id)}
+                            >
+                              票据档案 {item.artifacts?.length ?? 0}
+                            </button>
+                            <button
+                              type="button"
+                              className="archive-delete-button"
+                              onClick={() => askDeleteMatch(item)}
+                              disabled={item.id !== latestMatchId}
+                              title={
+                                item.id === latestMatchId
+                                  ? "永久删除这场比赛"
+                                  : "需先删除更新的比赛"
+                              }
+                            >
+                              {item.id === latestMatchId ? "删除本场" : "需先删除更新比赛"}
+                            </button>
+                          </div>
+                        </div>
+                        <div
+                          className="history-rollovers"
+                          role="group"
+                          aria-label="本场两种玩法滚存记录"
+                        >
+                          <div>
+                            <strong>胜负滚存链</strong>
+                            <span>带入 {formatMoney(rolloverInFor(item, "winner"))}</span>
+                            <i aria-hidden="true">→</i>
+                            <span>
+                              滚出 {winnerRolloverOut === null ? "待结算" : formatMoney(winnerRolloverOut)}
+                            </span>
+                          </div>
+                          <div>
+                            <strong>比分滚存链</strong>
+                            <span>带入 {formatMoney(rolloverInFor(item, "score"))}</span>
+                            <i aria-hidden="true">→</i>
+                            <span>
+                              滚出 {scoreRolloverOut === null ? "待结算" : formatMoney(scoreRolloverOut)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="history-bets">
+                          <div className="history-bet-head">
+                            <span>下注人</span>
+                            <span>玩法 / 预测</span>
+                            <span>金额</span>
+                            <span>结果</span>
+                            <span>最终返还</span>
+                            <span>操作</span>
+                          </div>
+                          {item.bets.length === 0 ? (
+                            <div className="history-bet-empty">本场没有下注记录</div>
+                          ) : (
+                            item.bets.map((bet) => {
+                              const settlement = settlementFor(item, bet.mode);
+                              const payout = settlement?.payouts.find(
+                                (entry) => entry.betId === bet.id,
+                              );
+                              const artifact = item.artifacts?.find(
+                                (entry) => entry.betId === bet.id,
+                              );
+                              return (
+                                <div className="history-bet-row" key={bet.id}>
+                                  <strong>{bet.bettorName}</strong>
+                                  <div>
+                                    <span className="tiny-mode">{MODE_COPY[bet.mode].short}</span>
+                                    <b>{betPrediction(bet, item)}</b>
+                                  </div>
+                                  <strong>{formatMoney(bet.amountCents)}</strong>
+                                  <span
+                                    className={
+                                      item.status !== "settled"
+                                        ? "history-pending"
+                                        : payout
+                                          ? "history-hit"
+                                          : "history-miss"
+                                    }
+                                  >
+                                    {item.status !== "settled"
+                                      ? "待结算"
+                                      : payout
+                                        ? "命中"
+                                        : "未中"}
+                                  </span>
+                                  <strong className={payout ? "history-payout" : ""}>
+                                    {item.status === "settled"
+                                      ? formatMoney(payout?.payoutCents ?? 0)
+                                      : "—"}
+                                  </strong>
+                                  <div className="history-bet-actions">
+                                    {artifact && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openReceipt(artifact)}
+                                      >
+                                        票据
+                                      </button>
+                                    )}
+                                    {item.status === "open" && (
+                                      <button
+                                        type="button"
+                                        className="danger-link"
+                                        onClick={() => askDeleteBet(item, bet)}
+                                      >
+                                        删除
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
                         </div>
                       </div>
                     </details>
@@ -1048,8 +1692,73 @@ export default function Home() {
 
       {showNewMatch && renderNewMatchDialog()}
 
+      {statusTarget && (
+        <div className="modal-backdrop" onMouseDown={closeStatusDialog}>
+          <section
+            className="modal-card admin-action-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="status-confirm-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              aria-label="关闭"
+              onClick={closeStatusDialog}
+            >
+              ×
+            </button>
+            <p className="eyebrow">ADMIN CONFIRM</p>
+            <h2 id="status-confirm-title">
+              {statusTarget === "closed" ? "确认封盘" : "确认重新开放"}
+            </h2>
+            <p className="modal-intro">
+              {statusTarget === "closed"
+                ? "封盘后将停止新增和修改下注，并生成封盘快照。"
+                : "重新开放后可以继续新增或修改下注，原封盘快照会保留为历史版本。"}
+            </p>
+            <form className="delete-form" onSubmit={changeStatus}>
+              <label className="field">
+                <span>输入管理密码确认</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  value={statusPassword}
+                  placeholder="请输入密码"
+                  onChange={(event) => setStatusPassword(event.target.value)}
+                />
+              </label>
+              <div className="delete-actions">
+                <button type="button" className="ghost-button" onClick={closeStatusDialog}>
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="primary-button small-button"
+                  disabled={!statusPassword || busyAction === "setStatus"}
+                >
+                  {busyAction === "setStatus"
+                    ? "正在确认…"
+                    : statusTarget === "closed"
+                      ? "确认封盘"
+                      : "确认重新开放"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
       {showSettle && (
-        <div className="modal-backdrop" onMouseDown={() => setShowSettle(false)}>
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => {
+            setShowSettle(false);
+            setSettlePassword("");
+          }}
+        >
           <section
             className="modal-card settle-modal"
             role="dialog"
@@ -1061,7 +1770,10 @@ export default function Home() {
               className="modal-close"
               type="button"
               aria-label="关闭"
-              onClick={() => setShowSettle(false)}
+              onClick={() => {
+                setShowSettle(false);
+                setSettlePassword("");
+              }}
             >
               ×
             </button>
@@ -1090,13 +1802,229 @@ export default function Home() {
                   );
                 })}
               </div>
+              <label className="field settle-password-field">
+                <span>输入管理密码确认</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={settlePassword}
+                  placeholder="请输入密码"
+                  onChange={(event) => setSettlePassword(event.target.value)}
+                />
+              </label>
               <button
                 className="primary-button full-width-button"
                 type="submit"
-                disabled={!settleScore || busyAction === "settle"}
+                disabled={!settleScore || !settlePassword || busyAction === "settle"}
               >
                 {busyAction === "settle" ? "正在结算…" : "确认赛果并结算"}
               </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {archiveMatch && (
+        <div className="modal-backdrop" onMouseDown={() => setArchiveMatchId(null)}>
+          <section
+            className="modal-card artifact-archive-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="artifact-archive-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              aria-label="关闭"
+              onClick={() => setArchiveMatchId(null)}
+            >
+              ×
+            </button>
+            <p className="eyebrow">RECEIPT ARCHIVE</p>
+            <h2 id="artifact-archive-title">票据档案</h2>
+            <p className="modal-intro">
+              {archiveMatch.playerA} VS {archiveMatch.playerB} · 已保存 {archiveMatch.artifacts?.length ?? 0} 张
+            </p>
+            <div className="artifact-list">
+              {(archiveMatch.artifacts ?? []).length === 0 ? (
+                <div className="artifact-empty">
+                  <strong>还没有票据</strong>
+                  <span>新下注、封盘和结算后会自动保存快照。</span>
+                </div>
+              ) : (
+                archiveMatch.artifacts.map((artifact) => (
+                  <button
+                    className="artifact-list-item"
+                    type="button"
+                    key={artifact.id}
+                    onClick={() => {
+                      setArchiveMatchId(null);
+                      openReceipt(artifact);
+                    }}
+                  >
+                    <span className={`artifact-icon artifact-${artifact.kind}`} aria-hidden="true">
+                      {artifact.kind === "bet" ? "票" : artifact.kind === "sealed" ? "锁" : "结"}
+                    </span>
+                    <span className="artifact-copy">
+                      <strong>{ARTIFACT_KIND_COPY[artifact.kind]}</strong>
+                      <small>{artifact.code} · {formatTime(artifact.createdAt)}</small>
+                    </span>
+                    <span className={`artifact-status artifact-status-${artifact.status}`}>
+                      {ARTIFACT_STATUS_COPY[artifact.status]}
+                    </span>
+                    <b>查看图片</b>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {receiptArtifact && (
+        <div className="modal-backdrop receipt-backdrop" onMouseDown={closeReceipt}>
+          <section
+            className="receipt-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="receipt-preview-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              aria-label="关闭"
+              onClick={closeReceipt}
+            >
+              ×
+            </button>
+            <div className="receipt-preview-stage">
+              {renderedReceipt ? (
+                // Canvas 在浏览器内动态生成 Blob URL，不适用 Next Image 优化。
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={renderedReceipt.url}
+                  alt={`${ARTIFACT_KIND_COPY[receiptArtifact.kind]} ${receiptArtifact.code}`}
+                />
+              ) : receiptError ? (
+                <div className="receipt-render-error">
+                  <strong>图片暂未生成</strong>
+                  <span>{receiptError}</span>
+                </div>
+              ) : (
+                    <div className="receipt-rendering">
+                      <span className="loading-mark">8</span>
+                      <p>正在生成高清票据…</p>
+                    </div>
+              )}
+            </div>
+            <aside className="receipt-sidebar">
+              <p className="eyebrow">SNAPSHOT READY</p>
+              <h2 id="receipt-preview-title">{ARTIFACT_KIND_COPY[receiptArtifact.kind]}</h2>
+              <div className="receipt-meta-card">
+                <span>票据号</span>
+                <strong>{receiptArtifact.code}</strong>
+                <span>生成时间</span>
+                <strong>{formatTime(receiptArtifact.createdAt)}</strong>
+                <span>状态</span>
+                <strong className={`receipt-status-${receiptArtifact.status}`}>
+                  {ARTIFACT_STATUS_COPY[receiptArtifact.status]}
+                </strong>
+              </div>
+              {receiptArtifact.status !== "active" && (
+                <div className="receipt-invalid-note">
+                  这是历史版本，仅作追溯；当前有效记录请以最新票据为准。
+                </div>
+              )}
+              <div className="receipt-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={downloadReceipt}
+                  disabled={!renderedReceipt}
+                >
+                  下载图片
+                </button>
+                <button
+                  className="outline-button"
+                  type="button"
+                  onClick={() => void copyReceipt()}
+                  disabled={!renderedReceipt}
+                >
+                  复制图片
+                </button>
+                <button className="ghost-button" type="button" onClick={closeReceipt}>
+                  关闭
+                </button>
+              </div>
+              <p className="receipt-copy-tip">
+                局域网 IP 访问时，部分浏览器会限制剪贴板；下载图片始终可用。
+              </p>
+            </aside>
+          </section>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="modal-backdrop" onMouseDown={closeDeleteDialog}>
+          <section
+            className="modal-card delete-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              aria-label="关闭"
+              onClick={closeDeleteDialog}
+            >
+              ×
+            </button>
+            <p className="eyebrow danger-eyebrow">PERMANENT DELETE</p>
+            <h2 id="delete-title">
+              {deleteTarget.kind === "bet" ? "删除这笔下注" : "删除整场比赛"}
+            </h2>
+            <div className="delete-warning">
+              <strong>此操作无法撤销</strong>
+              <p>
+                {deleteTarget.kind === "bet"
+                  ? `${deleteTarget.bet.bettorName} 的 ${MODE_COPY[deleteTarget.bet.mode].title}记录将被永久删除，已生成票据会标记为“已取消”以供追溯。`
+                  : `${deleteTarget.match.playerA} VS ${deleteTarget.match.playerB} 的比赛、下注、结算和所有票据将全部永久删除，不可恢复；后续滚存将按剩余比赛重新衔接。`}
+              </p>
+            </div>
+            <form className="delete-form" onSubmit={confirmDelete}>
+              <label className="field">
+                <span>输入管理密码确认</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  value={deletePassword}
+                  placeholder="请输入密码"
+                  onChange={(event) => setDeletePassword(event.target.value)}
+                />
+              </label>
+              <div className="delete-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={closeDeleteDialog}
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="destructive-button"
+                  disabled={!deletePassword || busyAction.startsWith("delete")}
+                >
+                  {busyAction.startsWith("delete")
+                    ? "正在删除…"
+                    : "确认永久删除"}
+                </button>
+              </div>
             </form>
           </section>
         </div>
