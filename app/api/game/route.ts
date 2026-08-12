@@ -40,6 +40,7 @@ interface BetRow {
   match_id: number;
   bettor_name: string;
   bettor_key: string;
+  note: string;
   mode: BetMode;
   amount_cents: number;
   winner_pick: WinnerSide | null;
@@ -79,6 +80,7 @@ interface PublicBet {
   id: number;
   matchId: number;
   bettorName: string;
+  note: string;
   mode: BetMode;
   amountCents: number;
   winnerPick: WinnerSide | null;
@@ -289,6 +291,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
   }
 
   const bettorName = requiredText(payload.bettorName, "请填写下注人姓名。", 40);
+  const note = optionalText(payload.note, 80);
   const bettorKey = normalizeName(bettorName);
   if (
     bettorKey === normalizeName(match.player_a) ||
@@ -346,6 +349,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
     match_id: match.id,
     bettor_name: bettorName,
     bettor_key: bettorKey,
+    note,
     mode,
     amount_cents: amountCents,
     winner_pick: winnerPick,
@@ -372,10 +376,10 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
     d1
       .prepare(`
         INSERT INTO bets (
-          match_id, bettor_name, bettor_key, mode, amount_cents, winner_pick,
+          match_id, bettor_name, bettor_key, note, mode, amount_cents, winner_pick,
           predicted_score_a, predicted_score_b, created_at, updated_at
         )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         FROM matches
         WHERE id = ?
           AND status = 'open'
@@ -387,6 +391,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
           AND updated_at = ?
         ON CONFLICT (match_id, bettor_key, mode) DO UPDATE SET
           bettor_name = excluded.bettor_name,
+          note = excluded.note,
           amount_cents = excluded.amount_cents,
           winner_pick = excluded.winner_pick,
           predicted_score_a = excluded.predicted_score_a,
@@ -397,6 +402,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
         match.id,
         bettorName,
         bettorKey,
+        note,
         mode,
         amountCents,
         winnerPick,
@@ -422,6 +428,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
             WHERE match_id = matches.id
               AND bettor_key = ? AND mode = ? AND updated_at = ?
               AND bettor_name = ? AND amount_cents = ?
+              AND note = ?
               AND winner_pick IS ?
               AND predicted_score_a IS ?
               AND predicted_score_b IS ?
@@ -436,6 +443,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
         now,
         bettorName,
         amountCents,
+        note,
         winnerPick,
         predictedScoreA,
         predictedScoreB,
@@ -887,6 +895,7 @@ function serializeMatch(
     id: bet.id,
     matchId: bet.match_id,
     bettorName: bet.bettor_name,
+    note: bet.note,
     mode: bet.mode,
     amountCents: bet.amount_cents,
     winnerPick: bet.winner_pick,
@@ -1111,6 +1120,7 @@ function buildBetArtifactPayload(
     bet: {
       id: bet.id,
       bettorName: bet.bettor_name,
+      note: bet.note,
       mode: bet.mode,
       amountCents: bet.amount_cents,
       winnerPick: bet.winner_pick,
@@ -1204,6 +1214,7 @@ function buildSealedArtifactPayload(
     return {
       betId: bet.id,
       bettorName: bet.bettor_name,
+      note: bet.note,
       mode: bet.mode,
       selectionLabel,
       amountCents: bet.amount_cents,
@@ -1263,6 +1274,7 @@ function buildSettledArtifactPayload(
     return {
       betId: bet.id,
       bettorName: bet.bettor_name,
+      note: bet.note,
       mode: bet.mode,
       selectionLabel:
         bet.mode === "winner"

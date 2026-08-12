@@ -29,6 +29,13 @@
       "when": 1786461394828,
       "tag": "0003_parched_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786512715893,
+      "tag": "0004_fast_slipstream",
+      "breakpoints": true
     }
   ]
 }

@@ -15,6 +15,7 @@ type Bet = {
   id: number;
   matchId: number;
   bettorName: string;
+  note: string;
   mode: BetMode;
   amountCents: number;
   winnerPick: Side | null;
@@ -241,6 +242,7 @@ export default function Home() {
   const [loadError, setLoadError] = useState("");
   const [mode, setMode] = useState<BetMode>("winner");
   const [bettorName, setBettorName] = useState("");
+  const [betNote, setBetNote] = useState("");
   const [amount, setAmount] = useState("10");
   const [winnerPick, setWinnerPick] = useState<Side | null>(null);
   const [scorePick, setScorePick] = useState("");
@@ -466,6 +468,7 @@ export default function Home() {
         action: "addBet",
         matchId: match.id,
         bettorName: bettorName.trim(),
+        note: betNote.trim(),
         mode,
         amountCents,
         winnerPick: mode === "winner" ? winnerPick : null,
@@ -476,6 +479,7 @@ export default function Home() {
     );
     if (saved) {
       setBettorName("");
+      setBetNote("");
       setWinnerPick(null);
       setScorePick("");
     }
@@ -483,6 +487,7 @@ export default function Home() {
 
   function editBet(bet: Bet) {
     setBettorName(bet.bettorName);
+    setBetNote(bet.note ?? "");
     setAmount(String(bet.amountCents / 100));
     if (bet.mode === "winner") setWinnerPick(bet.winnerPick);
     if (bet.mode === "score") {
@@ -1037,6 +1042,7 @@ export default function Home() {
                         <thead>
                           <tr>
                             <th>下注人</th>
+                            <th>助威备注</th>
                             <th>选择</th>
                             <th>下注金额</th>
                             <th>预估奖金</th>
@@ -1046,7 +1052,7 @@ export default function Home() {
                         <tbody>
                           {summaryBets.length === 0 ? (
                             <tr className="sealed-empty-row">
-                              <td colSpan={5}>本玩法没有下注</td>
+                              <td colSpan={6}>本玩法没有下注</td>
                             </tr>
                           ) : (
                             summaryBets.map((bet) => {
@@ -1054,6 +1060,7 @@ export default function Home() {
                               return (
                                 <tr key={bet.id}>
                                   <td><strong>{bet.bettorName}</strong></td>
+                                  <td className="bet-note-cell">{bet.note || "—"}</td>
                                   <td>{betPrediction(bet, match)}</td>
                                   <td>{formatMoney(bet.amountCents)}</td>
                                   <td className="estimated-payout">
@@ -1069,7 +1076,7 @@ export default function Home() {
                         </tbody>
                         <tfoot>
                           <tr>
-                            <td colSpan={2}>合计</td>
+                            <td colSpan={3}>合计</td>
                             <td>{formatMoney(summaryStake)}</td>
                             <td colSpan={2}>
                               滚存 {formatMoney(summaryRollover)}
@@ -1139,6 +1146,18 @@ export default function Home() {
                     onChange={(event) => setBettorName(event.target.value)}
                   />
                   <small>同名再次保存，会更新该玩法下的原记录</small>
+                </label>
+
+                <label className="field full-field">
+                  <span>助威备注 <i>选填</i></span>
+                  <input
+                    autoComplete="off"
+                    value={betNote}
+                    maxLength={80}
+                    placeholder="例如：稳住心态，拿下比赛！"
+                    onChange={(event) => setBetNote(event.target.value)}
+                  />
+                  <small>喊口号、给运动员加油，最多 80 字</small>
                 </label>
 
                 <fieldset className="choice-fieldset">
@@ -1429,6 +1448,7 @@ export default function Home() {
                           )}
                         </div>
                         <small>{formatTime(bet.updatedAt ?? bet.createdAt)}</small>
+                        {bet.note && <p className="bet-cheer">“{bet.note}”</p>}
                       </div>
                       <div className="prediction">
                         <span>预测</span>
@@ -1600,6 +1620,7 @@ export default function Home() {
                         <div className="history-bets">
                           <div className="history-bet-head">
                             <span>下注人</span>
+                            <span>助威备注</span>
                             <span>玩法 / 预测</span>
                             <span>金额</span>
                             <span>结果</span>
@@ -1620,6 +1641,7 @@ export default function Home() {
                               return (
                                 <div className="history-bet-row" key={bet.id}>
                                   <strong>{bet.bettorName}</strong>
+                                  <span className="history-bet-note">{bet.note || "—"}</span>
                                   <div>
                                     <span className="tiny-mode">{MODE_COPY[bet.mode].short}</span>
                                     <b>{betPrediction(bet, item)}</b>

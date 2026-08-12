@@ -122,3 +122,26 @@ test("renders detailed sealed summaries on page and downloadable snapshot", asyn
   assert.match(canvas, /封盘下注汇总/);
   assert.match(canvas, /drawSealedTable/);
 });
+
+test("persists bettor cheers across ledgers and receipt snapshots", async () => {
+  const [page, route, schema, database, canvas, css, migration] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/game/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/receipt-canvas.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_fast_slipstream.sql", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /助威备注/);
+  assert.match(page, /betNote\.trim\(\)/);
+  assert.doesNotMatch(page, /alipay-payment-code\.png/);
+  assert.match(route, /optionalText\(payload\.note, 80\)/);
+  assert.match(route, /note: bet\.note/);
+  assert.match(schema, /note: text\("note"\)/);
+  assert.match(database, /ALTER TABLE bets ADD COLUMN note/);
+  assert.match(canvas, /助威备注/);
+  assert.doesNotMatch(css, /\.payment-code \{/);
+  assert.match(migration, /ALTER TABLE `bets` ADD `note`/);
+});

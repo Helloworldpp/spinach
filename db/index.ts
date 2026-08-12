@@ -76,6 +76,7 @@ async function initializeGameDatabase() {
         match_id INTEGER NOT NULL,
         bettor_name TEXT NOT NULL,
         bettor_key TEXT NOT NULL,
+        note TEXT DEFAULT '' NOT NULL,
         mode TEXT NOT NULL,
         amount_cents INTEGER NOT NULL,
         winner_pick TEXT,
@@ -159,6 +160,18 @@ async function initializeGameDatabase() {
         .prepare(`ALTER TABLE matches ADD COLUMN ${column.name} ${column.definition}`)
         .run();
     }
+  }
+
+  const betColumns = await d1
+    .prepare("PRAGMA table_info(bets)")
+    .all<{ name: string }>();
+  const betColumnNames = new Set(
+    (betColumns.results ?? []).map((column: { name: string }) => column.name),
+  );
+  if (!betColumnNames.has("note")) {
+    await d1
+      .prepare("ALTER TABLE bets ADD COLUMN note TEXT DEFAULT '' NOT NULL")
+      .run();
   }
 
   await backfillRolloverSnapshots(d1);

@@ -76,6 +76,7 @@ export const bets = sqliteTable(
       .references(() => matches.id, { onDelete: "cascade" }),
     bettorName: text("bettor_name").notNull(),
     bettorKey: text("bettor_key").notNull(),
+    note: text("note").notNull().default(""),
     mode: text("mode", { enum: ["winner", "score"] }).notNull(),
     amountCents: integer("amount_cents").notNull(),
     winnerPick: text("winner_pick", { enum: ["A", "B"] }),

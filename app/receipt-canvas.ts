@@ -22,6 +22,7 @@ export type RenderedReceipt = {
 type DisplayRow = { label: string; value: string; accent?: boolean };
 type SealedBetSummary = {
   bettorName: string;
+  note: string;
   mode: "winner" | "score";
   selectionLabel: string;
   amountCents: number;
@@ -169,6 +170,7 @@ function betRows(payload: Record<string, unknown>): DisplayRow[] {
 
   return [
     { label: "下注人", value: textValue(payload, ["bettorName", "bet.bettorName"]), accent: true },
+    { label: "助威备注", value: textValue(payload, ["note", "bet.note"], "无") },
     { label: "玩法", value: mode === "winner" ? "胜负局" : mode === "score" ? "猜比分" : mode },
     { label: "选择", value: selection, accent: true },
     { label: "下注金额", value: money(amount) },
@@ -259,6 +261,7 @@ function sealedBetSummaries(payload: Record<string, unknown>): SealedBetSummary[
     if (mode !== "winner" && mode !== "score") return [];
     return [{
       bettorName: textValue(summary, ["bettorName"]),
+      note: textValue(summary, ["note"], ""),
       mode,
       selectionLabel: textValue(summary, ["selectionLabel"]),
       amountCents: numberValue(summary, ["amountCents"]) ?? 0,
@@ -274,7 +277,7 @@ function drawSealedTable(
   bets: SealedBetSummary[],
   y: number,
 ) {
-  const rowHeight = 48;
+  const rowHeight = 62;
   const headerHeight = 104;
   const bodyRows = Math.max(1, bets.length);
   const height = headerHeight + bodyRows * rowHeight + 52;
@@ -335,6 +338,17 @@ function drawSealedTable(
       context.font = '750 20px "PingFang SC", "Microsoft YaHei", sans-serif';
       context.textAlign = "left";
       context.fillText(fitText(context, bet.bettorName, 220, 20, 750), columns[0].x, baseline);
+      if (bet.note) {
+        context.fillStyle = "#9d9f98";
+        context.font = '600 15px "PingFang SC", "Microsoft YaHei", sans-serif';
+        context.fillText(
+          fitText(context, `“${bet.note}”`, 220, 15, 600),
+          columns[0].x,
+          baseline + 20,
+        );
+      }
+      context.fillStyle = "#f4efe2";
+      context.font = '750 20px "PingFang SC", "Microsoft YaHei", sans-serif';
       context.fillText(fitText(context, bet.selectionLabel, 250, 20, 750), columns[1].x, baseline);
       context.textAlign = "right";
       context.fillText(money(bet.amountCents), columns[2].x, baseline);
@@ -358,11 +372,12 @@ function settledBetRows(payload: Record<string, unknown>): DisplayRow[] {
     const correct = Boolean(at(result, "isCorrect", "correct", "hit"));
     const payout = numberValue(result, ["payoutCents", "actualPayoutCents"]);
     const profit = numberValue(result, ["netProfitCents", "actualNetProfitCents"]);
+    const note = textValue(result, ["note"], "");
     const detail = correct
       ? `返还 ${money(payout)} · 净赢 ${money(profit)}`
       : `未命中 · 返还 ${money(payout)} · 净赢 ${money(profit)}`;
     return {
-      label: `${mode === "winner" ? "胜负" : "比分"}·${textValue(result, ["bettorName"])}·${textValue(result, ["selectionLabel"])}`,
+      label: `${mode === "winner" ? "胜负" : "比分"}·${textValue(result, ["bettorName"])}·${textValue(result, ["selectionLabel"])}${note ? `·“${note}”` : ""}`,
       value: detail,
       accent: correct,
     };
@@ -440,7 +455,7 @@ async function renderSealedSummaryReceipt(
 ): Promise<RenderedReceipt> {
   const winnerBets = summaries.filter((bet) => bet.mode === "winner");
   const scoreBets = summaries.filter((bet) => bet.mode === "score");
-  const tableHeight = (count: number) => 104 + Math.max(1, count) * 48 + 52;
+  const tableHeight = (count: number) => 104 + Math.max(1, count) * 62 + 52;
   const canvasHeight = Math.max(
     1440,
     614 + tableHeight(winnerBets.length) + tableHeight(scoreBets.length) + 250,

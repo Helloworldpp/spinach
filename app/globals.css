@@ -60,7 +60,8 @@ body::before {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -75,6 +76,7 @@ button {
 
 button:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
 summary:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--gold-light);
@@ -861,8 +863,18 @@ footer {
 .sealed-summary th:first-child,
 .sealed-summary td:first-child,
 .sealed-summary th:nth-child(2),
-.sealed-summary td:nth-child(2) {
+.sealed-summary td:nth-child(2),
+.sealed-summary th:nth-child(3),
+.sealed-summary td:nth-child(3) {
   text-align: left;
+}
+
+.bet-note-cell {
+  min-width: 150px;
+  max-width: 240px;
+  color: var(--muted) !important;
+  white-space: normal;
+  line-height: 1.5;
 }
 
 .sealed-summary th {
@@ -983,6 +995,13 @@ footer {
   color: #dcd8ce;
   font-size: 15px;
   font-weight: 800;
+}
+
+.field > span i {
+  color: var(--dim);
+  font-size: 0.9em;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .field input {
@@ -1725,6 +1744,17 @@ footer {
   line-height: 1.35;
 }
 
+.bet-main .bet-cheer {
+  max-width: 260px;
+  margin: 7px 0 0;
+  overflow: hidden;
+  color: var(--gold-light);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .tiny-mode,
 .hit-badge,
 .miss-badge {
@@ -2121,11 +2151,19 @@ footer {
 .history-bet-head,
 .history-bet-row {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) minmax(185px, 1.45fr) 100px 80px 110px 96px;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(160px, 1.2fr) minmax(175px, 1.35fr) 90px 76px 105px 90px;
   align-items: center;
   gap: 14px;
   min-height: 64px;
   padding: 12px 16px;
+}
+
+.history-bet-note {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
 }
 
 .history-bet-head {
@@ -2149,14 +2187,14 @@ footer {
   font-variant-numeric: tabular-nums;
 }
 
-.history-bet-row > div:nth-child(2) {
+.history-bet-row > div:nth-child(3) {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.history-bet-row > div:nth-child(2) b {
+.history-bet-row > div:nth-child(3) b {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
