@@ -54,6 +54,7 @@ type GameMatch = {
   status: MatchStatus;
   resultScoreA: number | null;
   resultScoreB: number | null;
+  winnerPrizeBps: number;
   createdAt: string;
   settledAt?: string | null;
   winnerRolloverInCents: number;
@@ -110,9 +111,7 @@ const STATUS_COPY: Record<MatchStatus, string> = {
 };
 
 const ARTIFACT_KIND_COPY: Record<ReceiptArtifact["kind"], string> = {
-  bet: "下注票据",
   sealed: "封盘快照",
-  settled: "结算票据",
 };
 
 const ARTIFACT_STATUS_COPY: Record<ReceiptArtifact["status"], string> = {
@@ -157,6 +156,43 @@ function settlementFor(match: GameMatch, mode: BetMode) {
     return candidates.find((item) => item.mode === mode) ?? null;
   }
   return candidates[mode] ?? null;
+}
+
+type PaymentSummary = {
+  bettorName: string;
+  payoutCents: number;
+  stakeCents: number;
+  profitCents: number;
+  hitCount: number;
+  modes: BetMode[];
+};
+
+function paymentSummaryFor(match: GameMatch): PaymentSummary[] {
+  const rows = new Map<string, PaymentSummary>();
+  (['winner', 'score'] as const).forEach((mode) => {
+    const settlement = settlementFor(match, mode);
+    settlement?.payouts.forEach((payout) => {
+      const bet = match.bets.find((entry) => entry.id === payout.betId);
+      const key = normalizeBettorName(payout.bettorName);
+      const current = rows.get(key) ?? {
+        bettorName: payout.bettorName,
+        payoutCents: 0,
+        stakeCents: 0,
+        profitCents: 0,
+        hitCount: 0,
+        modes: [],
+      };
+      current.payoutCents += payout.payoutCents;
+      current.stakeCents += bet?.amountCents ?? payout.amountCents;
+      current.profitCents = current.payoutCents - current.stakeCents;
+      current.hitCount += 1;
+      if (!current.modes.includes(mode)) current.modes.push(mode);
+      rows.set(key, current);
+    });
+  });
+  return [...rows.values()].sort(
+    (left, right) => right.payoutCents - left.payoutCents || left.bettorName.localeCompare(right.bettorName, "zh-CN"),
+  );
 }
 
 function rolloverInFor(match: GameMatch, mode: BetMode) {
@@ -207,7 +243,9 @@ function estimateSealedPayout(match: GameMatch, bet: Bet) {
     0,
   );
   const championPrizeCents =
-    bet.mode === "winner" ? Math.round(newStakeCents * 0.2) : 0;
+    bet.mode === "winner"
+      ? Math.round((newStakeCents * match.winnerPrizeBps) / 10000)
+      : 0;
   const distributableCents =
     newStakeCents + rolloverInFor(match, bet.mode) - championPrizeCents;
   const selectionStakeCents = modeBets
@@ -418,6 +456,14 @@ export default function Home() {
   );
 
   const modeSettlement = match ? settlementFor(match, mode) : null;
+  const paymentSummary = useMemo(
+    () => (match?.status === "settled" ? paymentSummaryFor(match) : []),
+    [match],
+  );
+  const paymentTotalCents = useMemo(
+    () => paymentSummary.reduce((sum, row) => sum + row.payoutCents, 0),
+    [paymentSummary],
+  );
 
   function openNewMatchDialog() {
     if (match) {
@@ -685,7 +731,8 @@ export default function Home() {
   const modeCurrentTotalCents = modeNewStakeCents + modeRolloverInCents;
   const modeChampionPrizeCents =
     mode === "winner"
-      ? modeSettlement?.championPrizeCents ?? Math.round(modeNewStakeCents * 0.2)
+      ? modeSettlement?.championPrizeCents ??
+        Math.round((modeNewStakeCents * match.winnerPrizeBps) / 10000)
       : 0;
   const modeDistributableCents =
     mode === "winner"
@@ -849,7 +896,7 @@ export default function Home() {
               canCreateMatch
                 ? "新开一局"
                 : match.bets.length === 0
-                  ? "当前空局已有历史票据，请先删除本场"
+                  ? "当前空局已有历史快照，请先删除本场"
                   : "请先结算当前对局"
             }
           >
@@ -946,7 +993,7 @@ export default function Home() {
                 className="outline-button receipt-archive-button"
                 onClick={() => setArchiveMatchId(match.id)}
               >
-                票据档案 <span>{match.artifacts?.length ?? 0}</span>
+                赛局快照 <span>{match.artifacts?.length ?? 0}</span>
               </button>
               {match.status === "open" && (
                 <button
@@ -1004,7 +1051,11 @@ export default function Home() {
               </div>
               <div className="sealed-summary-note">
                 <strong>{match.bets.length} 笔下注 · {formatMoney(allPool)}</strong>
-                <span>预估奖金按封盘奖池计算，最终以赛果结算为准</span>
+                <span>
+                  {match.status === "settled"
+                    ? "已按最终赛果结算；未命中返还为 ¥0"
+                    : "预估奖金按封盘奖池计算，最终以赛果结算为准"}
+                </span>
               </div>
             </div>
 
@@ -1017,7 +1068,9 @@ export default function Home() {
                 );
                 const summaryRollover = rolloverInFor(match, summaryMode);
                 const summaryChampionPrize =
-                  summaryMode === "winner" ? Math.round(summaryStake * 0.2) : 0;
+                  summaryMode === "winner"
+                    ? Math.round((summaryStake * match.winnerPrizeBps) / 10000)
+                    : 0;
                 const summaryPool =
                   summaryStake + summaryRollover - summaryChampionPrize;
 
@@ -1045,8 +1098,8 @@ export default function Home() {
                             <th>助威备注</th>
                             <th>选择</th>
                             <th>下注金额</th>
-                            <th>预估奖金</th>
-                            <th>预估净赢</th>
+                            <th>{match.status === "settled" ? "实际返还" : "预估奖金"}</th>
+                            <th>{match.status === "settled" ? "实际净赢" : "预估净赢"}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1057,6 +1110,12 @@ export default function Home() {
                           ) : (
                             summaryBets.map((bet) => {
                               const estimatedPayout = estimateSealedPayout(match, bet);
+                              const finalPayout = settlementFor(match, summaryMode)?.payouts.find(
+                                (entry) => entry.betId === bet.id,
+                              )?.payoutCents ?? 0;
+                              const displayPayout =
+                                match.status === "settled" ? finalPayout : estimatedPayout;
+                              const displayProfit = displayPayout - bet.amountCents;
                               return (
                                 <tr key={bet.id}>
                                   <td><strong>{bet.bettorName}</strong></td>
@@ -1064,10 +1123,18 @@ export default function Home() {
                                   <td>{betPrediction(bet, match)}</td>
                                   <td>{formatMoney(bet.amountCents)}</td>
                                   <td className="estimated-payout">
-                                    {formatMoney(estimatedPayout)}
+                                    {formatMoney(displayPayout)}
                                   </td>
-                                  <td className={estimatedPayout >= bet.amountCents ? "estimated-profit" : ""}>
-                                    {formatMoney(estimatedPayout - bet.amountCents)}
+                                  <td
+                                    className={
+                                      displayProfit > 0
+                                        ? "estimated-profit"
+                                        : displayProfit < 0
+                                          ? "estimated-loss"
+                                          : ""
+                                    }
+                                  >
+                                    {formatMoney(displayProfit)}
                                   </td>
                                 </tr>
                               );
@@ -1080,8 +1147,8 @@ export default function Home() {
                             <td>{formatMoney(summaryStake)}</td>
                             <td colSpan={2}>
                               滚存 {formatMoney(summaryRollover)}
-                              {summaryMode === "winner" && (
-                                <> · 冠军奖金 {formatMoney(summaryChampionPrize)}</>
+                              {summaryMode === "winner" && summaryChampionPrize > 0 && (
+                                <> · 旧规则冠军奖金 {formatMoney(summaryChampionPrize)}</>
                               )}
                             </td>
                           </tr>
@@ -1304,7 +1371,11 @@ export default function Home() {
               <div className="pool-card-heading">
                 <span>{mode === "winner" ? "胜负池分配" : "比分池分配"}</span>
                 <strong>
-                  {mode === "winner" ? "新注 20 / 80 · 滚存全入竞猜" : "100% 归精确命中者"}
+                  {mode === "winner"
+                    ? match.winnerPrizeBps > 0
+                      ? "旧规则 · 新注 20 / 80"
+                      : "100% 归猜中胜者"
+                    : "100% 归精确命中者"}
                 </strong>
               </div>
               <div
@@ -1328,18 +1399,28 @@ export default function Home() {
                 </div>
               </div>
               {mode === "winner" ? (
-                <div className="pool-allocation">
-                  <div>
-                    <span>冠军奖金</span>
-                    <strong>{formatMoney(modeChampionPrizeCents)}</strong>
-                    <small>只取本局新增的 20%</small>
+                match.winnerPrizeBps > 0 ? (
+                  <div className="pool-allocation">
+                    <div>
+                      <span>旧规则冠军奖金</span>
+                      <strong>{formatMoney(modeChampionPrizeCents)}</strong>
+                      <small>本局新注的 20%</small>
+                    </div>
+                    <div className="featured-allocation">
+                      <span>当前可分奖池</span>
+                      <strong>{formatMoney(modeDistributableCents)}</strong>
+                      <small>本局新注的 80% ＋ 全部胜负滚存</small>
+                    </div>
                   </div>
-                  <div className="featured-allocation">
-                    <span>当前可分奖池</span>
-                    <strong>{formatMoney(modeDistributableCents)}</strong>
-                    <small>本局新增的 80% ＋ 全部胜负滚存</small>
+                ) : (
+                  <div className="score-allocation winner-allocation">
+                    <div>
+                      <span>当前可分奖池</span>
+                      <strong>{formatMoney(modeDistributableCents)}</strong>
+                    </div>
+                    <p>本局胜负下注与胜负滚存全部参与分配，不再抽取冠军奖金；命中胜者的人按下注比例分配。</p>
                   </div>
-                </div>
+                )
               ) : (
                 <div className="score-allocation">
                   <div>
@@ -1347,7 +1428,7 @@ export default function Home() {
                     <strong>{formatMoney(modeDistributableCents)}</strong>
                   </div>
                   <p>
-                    本局比分下注与比分滚存全部参与分配，不抽取冠军奖金；若只有一人下注且没有滚存，
+                    本局比分下注与比分滚存全部参与分配；若只有一人下注且没有滚存，
                     命中时为 1.00×，即返还本人下注。
                   </p>
                 </div>
@@ -1358,6 +1439,39 @@ export default function Home() {
               <span>下注人数 <strong>{uniqueBettors} 人</strong></span>
               <span>当前热门 <strong>{popularPick}</strong></span>
             </div>
+
+            {match.status === "settled" && (
+              <section className="payment-summary" aria-labelledby="payment-summary-title">
+                <div className="payment-summary-heading">
+                  <div>
+                    <p className="panel-index">PAYOUT SUMMARY</p>
+                    <h3 id="payment-summary-title">本场应付款汇总</h3>
+                    <span>最终比分 {match.resultScoreA} : {match.resultScoreB} · 请按“应付金额”转账</span>
+                  </div>
+                  <strong>{formatMoney(paymentTotalCents)}</strong>
+                </div>
+                {paymentSummary.length === 0 ? (
+                  <p className="payment-summary-empty">本场无人命中，暂时无需付款；奖池已滚入下一场同玩法。</p>
+                ) : (
+                  <div className="payment-summary-list">
+                    {paymentSummary.map((payment) => (
+                      <div className="payment-summary-row" key={payment.bettorName}>
+                        <div>
+                          <strong>{payment.bettorName}</strong>
+                          <span>
+                            命中 {payment.hitCount} 笔 · {payment.modes.map((item) => MODE_COPY[item].short).join("＋")}
+                          </span>
+                        </div>
+                        <div>
+                          <span>命中本金 {formatMoney(payment.stakeCents)} · 净赢 {formatMoney(payment.profitCents)}</span>
+                          <strong>应付 {formatMoney(payment.payoutCents)}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
 
             {match.status === "settled" && modeSettlement && (
               <div className="settlement-card">
@@ -1379,11 +1493,15 @@ export default function Home() {
                     <b>{formatMoney(modeSettlement.totalPoolCents)}</b>
                   </div>
                   <div>
-                    <span>{mode === "winner" ? "冠军奖金 · 新注20%" : "精确命中本金"}</span>
+                    <span>
+                      {mode === "winner" && modeChampionPrizeCents > 0
+                        ? "旧规则冠军奖金"
+                        : "命中下注本金"}
+                    </span>
                     <b>
                       {formatMoney(
-                        mode === "winner"
-                          ? modeSettlement.championPrizeCents
+                        mode === "winner" && modeChampionPrizeCents > 0
+                          ? modeChampionPrizeCents
                           : modeSettlement.totalCorrectStakeCents,
                       )}
                     </b>
@@ -1479,19 +1597,6 @@ export default function Home() {
                         {match.status === "open" && (
                           <button type="button" onClick={() => editBet(bet)}>编辑</button>
                         )}
-                        {match.artifacts?.some((artifact) => artifact.betId === bet.id) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const artifact = match.artifacts.find(
-                                (entry) => entry.betId === bet.id,
-                              );
-                              if (artifact) openReceipt(artifact);
-                            }}
-                          >
-                            票据
-                          </button>
-                        )}
                         {match.status === "open" && (
                           <button
                             type="button"
@@ -1522,11 +1627,11 @@ export default function Home() {
             </div>
             <div className="rule-item">
               <span>02</span>
-              <p><strong>胜负滚存链</strong>本局胜负新注的 20% 给冠军；其余 80% 加上胜负滚存，由猜中胜者的人分配。</p>
+              <p><strong>胜负滚存链</strong>本局胜负下注加上胜负滚存，100% 由猜中胜者的人按下注比例分配。</p>
             </div>
             <div className="rule-item">
               <span>03</span>
-              <p><strong>比分滚存链</strong>本局比分下注加上比分滚存，100% 由精确命中最终比分的人分配，不抽冠军奖。</p>
+              <p><strong>比分滚存链</strong>本局比分下注加上比分滚存，100% 由精确命中最终比分的人按下注比例分配。</p>
             </div>
             <div className="rule-item">
               <span>04</span>
@@ -1578,7 +1683,7 @@ export default function Home() {
                               className="archive-inline-button"
                               onClick={() => setArchiveMatchId(item.id)}
                             >
-                              票据档案 {item.artifacts?.length ?? 0}
+                              赛局快照 {item.artifacts?.length ?? 0}
                             </button>
                             <button
                               type="button"
@@ -1635,9 +1740,6 @@ export default function Home() {
                               const payout = settlement?.payouts.find(
                                 (entry) => entry.betId === bet.id,
                               );
-                              const artifact = item.artifacts?.find(
-                                (entry) => entry.betId === bet.id,
-                              );
                               return (
                                 <div className="history-bet-row" key={bet.id}>
                                   <strong>{bet.bettorName}</strong>
@@ -1668,14 +1770,6 @@ export default function Home() {
                                       : "—"}
                                   </strong>
                                   <div className="history-bet-actions">
-                                    {artifact && (
-                                      <button
-                                        type="button"
-                                        onClick={() => openReceipt(artifact)}
-                                      >
-                                        票据
-                                      </button>
-                                    )}
                                     {item.status === "open" && (
                                       <button
                                         type="button"
@@ -1863,16 +1957,16 @@ export default function Home() {
             >
               ×
             </button>
-            <p className="eyebrow">RECEIPT ARCHIVE</p>
-            <h2 id="artifact-archive-title">票据档案</h2>
+            <p className="eyebrow">MATCH SNAPSHOTS</p>
+            <h2 id="artifact-archive-title">赛局快照</h2>
             <p className="modal-intro">
               {archiveMatch.playerA} VS {archiveMatch.playerB} · 已保存 {archiveMatch.artifacts?.length ?? 0} 张
             </p>
             <div className="artifact-list">
               {(archiveMatch.artifacts ?? []).length === 0 ? (
                 <div className="artifact-empty">
-                  <strong>还没有票据</strong>
-                  <span>新下注、封盘和结算后会自动保存快照。</span>
+                  <strong>还没有快照</strong>
+                  <span>封盘和结算后会自动保存赛局快照。</span>
                 </div>
               ) : (
                 archiveMatch.artifacts.map((artifact) => (
@@ -1886,7 +1980,7 @@ export default function Home() {
                     }}
                   >
                     <span className={`artifact-icon artifact-${artifact.kind}`} aria-hidden="true">
-                      {artifact.kind === "bet" ? "票" : artifact.kind === "sealed" ? "锁" : "结"}
+                      锁
                     </span>
                     <span className="artifact-copy">
                       <strong>{ARTIFACT_KIND_COPY[artifact.kind]}</strong>

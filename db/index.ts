@@ -49,6 +49,7 @@ async function initializeGameDatabase() {
         status TEXT DEFAULT 'open' NOT NULL,
         result_score_a INTEGER,
         result_score_b INTEGER,
+        winner_prize_bps INTEGER DEFAULT 0 NOT NULL,
         winner_rollover_in_cents INTEGER DEFAULT 0 NOT NULL,
         winner_rollover_out_cents INTEGER,
         winner_rollover_source_match_id INTEGER,
@@ -61,6 +62,9 @@ async function initializeGameDatabase() {
         CONSTRAINT matches_status_check CHECK (status IN ('open', 'closed', 'settled')),
         CONSTRAINT matches_race_to_check CHECK (race_to > 0),
         CONSTRAINT matches_stake_limit_check CHECK (stake_limit_cents > 0),
+        CONSTRAINT matches_winner_prize_bps_check CHECK (
+          winner_prize_bps >= 0 AND winner_prize_bps <= 10000
+        ),
         CONSTRAINT matches_rollover_in_check CHECK (
           winner_rollover_in_cents >= 0 AND score_rollover_in_cents >= 0
         ),
@@ -160,6 +164,19 @@ async function initializeGameDatabase() {
         .prepare(`ALTER TABLE matches ADD COLUMN ${column.name} ${column.definition}`)
         .run();
     }
+  }
+
+  if (!columnNames.has("winner_prize_bps")) {
+    await d1
+      .prepare(
+        "ALTER TABLE matches ADD COLUMN winner_prize_bps INTEGER DEFAULT 0 NOT NULL",
+      )
+      .run();
+    // Settled matches retain the rule under which their recorded payouts and
+    // rollover snapshots were produced. Active matches adopt the new 0% rule.
+    await d1
+      .prepare("UPDATE matches SET winner_prize_bps = 2000 WHERE status = 'settled'")
+      .run();
   }
 
   const betColumns = await d1
@@ -268,6 +285,7 @@ interface RolloverMatchRow {
   status: "open" | "closed" | "settled";
   result_score_a: number | null;
   result_score_b: number | null;
+  winner_prize_bps: number;
   winner_rollover_in_cents: number;
   winner_rollover_out_cents: number | null;
   winner_rollover_source_match_id: number | null;
@@ -356,7 +374,9 @@ async function backfillRolloverSnapshots(d1: ReturnType<typeof getD1>) {
       assertSafeCents(winnerRolloverIn);
       assertSafeCents(scoreRolloverIn);
 
-      const championPrize = Math.floor((totals.winner_stake_cents + 2) / 5);
+      const championPrize = Math.floor(
+        (totals.winner_stake_cents * row.winner_prize_bps + 5000) / 10000,
+      );
       const winnerAvailable =
         totals.winner_stake_cents - championPrize + winnerRolloverIn;
       const scoreAvailable = totals.score_stake_cents + scoreRolloverIn;

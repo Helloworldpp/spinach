@@ -22,6 +22,7 @@ export const matches = sqliteTable(
       .default("open"),
     resultScoreA: integer("result_score_a"),
     resultScoreB: integer("result_score_b"),
+    winnerPrizeBps: integer("winner_prize_bps").notNull().default(0),
     winnerRolloverInCents: integer("winner_rollover_in_cents")
       .notNull()
       .default(0),
@@ -45,6 +46,10 @@ export const matches = sqliteTable(
     check(
       "matches_stake_limit_check",
       sql`${table.stakeLimitCents} > 0`,
+    ),
+    check(
+      "matches_winner_prize_bps_check",
+      sql`${table.winnerPrizeBps} >= 0 AND ${table.winnerPrizeBps} <= 10000`,
     ),
     check(
       "matches_rollover_in_check",

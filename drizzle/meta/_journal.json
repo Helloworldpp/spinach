@@ -36,6 +36,13 @@
       "when": 1786512715893,
       "tag": "0004_fast_slipstream",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786515352968,
+      "tag": "0005_first_maximus",
+      "breakpoints": true
     }
   ]
 }

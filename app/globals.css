@@ -736,7 +736,7 @@ footer {
 
 .sealed-summary {
   margin-top: 24px;
-  padding: 28px;
+  padding: 34px;
   border: 1px solid var(--line);
   border-radius: 22px;
   background:
@@ -755,7 +755,7 @@ footer {
 
 .sealed-summary-heading h2 {
   margin: 5px 0 0;
-  font-size: 27px;
+  font-size: 31px;
 }
 
 .sealed-summary-note {
@@ -766,12 +766,12 @@ footer {
 
 .sealed-summary-note strong {
   color: var(--gold-light);
-  font-size: 17px;
+  font-size: 20px;
 }
 
 .sealed-summary-note span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .sealed-summary-grid {
@@ -791,8 +791,8 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  min-height: 76px;
-  padding: 15px 20px;
+  min-height: 88px;
+  padding: 18px 24px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -805,18 +805,18 @@ footer {
 .sealed-summary-card > header > div > span {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   color: #101312;
   border-radius: 50%;
   background: var(--gold);
   font-family: Arial Black, sans-serif;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .sealed-summary-card h3 {
   margin: 0;
-  font-size: 19px;
+  font-size: 23px;
 }
 
 .sealed-summary-card > header > p {
@@ -828,12 +828,12 @@ footer {
 
 .sealed-summary-card > header > p strong {
   color: var(--paper);
-  font-size: 15px;
+  font-size: 18px;
 }
 
 .sealed-summary-card > header > p span {
   color: var(--gold-light);
-  font-size: 13px;
+  font-size: 16px;
 }
 
 .sealed-summary-score > header > div > span {
@@ -854,10 +854,10 @@ footer {
 
 .sealed-summary th,
 .sealed-summary td {
-  padding: 14px 20px;
+  padding: 18px 24px;
   text-align: right;
   border-bottom: 1px solid var(--line-soft);
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .sealed-summary th:first-child,
@@ -870,17 +870,17 @@ footer {
 }
 
 .bet-note-cell {
-  min-width: 150px;
-  max-width: 240px;
+  min-width: 190px;
+  max-width: 300px;
   color: var(--muted) !important;
   white-space: normal;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .sealed-summary th {
   color: var(--dim);
   background: rgba(255, 255, 255, 0.025);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 850;
 }
 
@@ -890,17 +890,24 @@ footer {
 
 .sealed-summary tbody td strong {
   color: var(--paper);
-  font-size: 15px;
+  font-size: 19px;
 }
 
 .sealed-summary .estimated-payout {
   color: var(--gold-light);
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 900;
 }
 
 .sealed-summary .estimated-profit {
   color: var(--success);
+  font-size: 20px;
+  font-weight: 850;
+}
+
+.sealed-summary .estimated-loss {
+  color: var(--danger);
+  font-size: 20px;
   font-weight: 850;
 }
 
@@ -1567,6 +1574,102 @@ footer {
 
 .ledger-insights strong {
   margin-left: 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.payment-summary {
+  margin-top: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(232, 189, 88, 0.46);
+  border-radius: 16px;
+  background:
+    linear-gradient(120deg, rgba(232, 189, 88, 0.11), transparent 48%),
+    rgba(20, 23, 19, 0.92);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.payment-summary-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 19px 20px 17px;
+  border-bottom: 1px solid rgba(232, 189, 88, 0.2);
+}
+
+.payment-summary-heading .panel-index {
+  margin: 0 0 7px;
+}
+
+.payment-summary-heading h3 {
+  margin: 0;
+  color: var(--paper);
+  font-size: 20px;
+  letter-spacing: 0.04em;
+}
+
+.payment-summary-heading span {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.payment-summary-heading > strong {
+  flex: 0 0 auto;
+  color: var(--gold-light);
+  font-family: Arial Black, sans-serif;
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-summary-list {
+  display: grid;
+}
+
+.payment-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 74px;
+  padding: 14px 20px;
+}
+
+.payment-summary-row + .payment-summary-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.payment-summary-row > div {
+  display: grid;
+  gap: 5px;
+}
+
+.payment-summary-row > div:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.payment-summary-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.payment-summary-row > div:first-child > strong {
+  color: var(--paper);
+  font-size: 17px;
+}
+
+.payment-summary-row > div:last-child > strong {
+  color: var(--success);
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-summary-empty {
+  margin: 0;
+  padding: 22px 20px;
   color: var(--muted);
   font-size: 14px;
 }
@@ -3119,6 +3222,21 @@ footer strong {
   .pool-allocation strong,
   .score-allocation strong {
     font-size: 15px;
+  }
+
+  .payment-summary-heading,
+  .payment-summary-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .payment-summary-heading > strong {
+    font-size: 26px;
+  }
+
+  .payment-summary-row > div:last-child {
+    justify-items: start;
+    text-align: left;
   }
 
   .settlement-grid {

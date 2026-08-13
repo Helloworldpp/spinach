@@ -60,7 +60,7 @@ test("documents two isolated rollover chains and score-pool projections", async 
   assert.match(database, /matches_rollover_nonnegative_update/);
 });
 
-test("persists versioned receipt images and protects permanent deletion", async () => {
+test("persists sealed snapshots and shows the settlement payment summary", async () => {
   const [page, canvas, route, schema, migration] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/receipt-canvas.ts", import.meta.url), "utf8"),
@@ -73,9 +73,11 @@ test("persists versioned receipt images and protects permanent deletion", async 
   assert.match(canvas, /canvas\.height = 1440/);
   assert.match(canvas, /renderReceipt/);
   assert.match(page, /ClipboardItem/);
-  assert.match(page, /下注票据/);
+  assert.doesNotMatch(page, /下注票据/);
   assert.match(page, /封盘快照/);
-  assert.match(page, /结算票据/);
+  assert.doesNotMatch(page, /结算票据/);
+  assert.match(page, /本场应付款汇总/);
+  assert.match(page, /请按“应付金额”转账/);
   assert.match(page, /action: "deleteMatch"/);
   assert.match(route, /ADMIN_PASSWORD_SHA256/);
   assert.match(route, /async function setStatus[\s\S]*assertAdminPassword\(payload\.password\)/);
@@ -83,9 +85,31 @@ test("persists versioned receipt images and protects permanent deletion", async 
   assert.match(page, /statusPassword/);
   assert.match(page, /settlePassword/);
   assert.match(route, /SELECT MAX\(id\) FROM matches/);
-  assert.match(route, /betResults/);
+  assert.doesNotMatch(route, /buildSettledArtifactPayload/);
+  assert.match(route, /WHERE kind = 'sealed'/);
   assert.match(schema, /receiptSnapshots/);
   assert.match(migration, /CREATE TABLE(?: IF NOT EXISTS)? `receipt_snapshots`/);
+});
+
+test("uses the full winner pool and does not create per-bet receipts", async () => {
+  const [page, route, schema, database, migration] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/game/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0005_first_maximus.sql", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /100% 归猜中胜者/);
+  assert.match(page, /胜负下注与胜负滚存全部参与分配/);
+  assert.match(page, /match\.winnerPrizeBps > 0/);
+  assert.doesNotMatch(route, /makeArtifactCode\("BET"/);
+  assert.doesNotMatch(route, /buildBetArtifactPayload/);
+  assert.match(route, /WHERE kind = 'sealed'/);
+  assert.match(schema, /winnerPrizeBps: integer\("winner_prize_bps"\).*default\(0\)/s);
+  assert.match(database, /status = 'settled'/);
+  assert.match(migration, /ADD `winner_prize_bps` integer DEFAULT 0 NOT NULL/);
+  assert.match(migration, /SET `winner_prize_bps` = 2000 WHERE `status` = 'settled'/);
 });
 
 test("enforces the fixed one-to-ten-yuan bet range", async () => {
@@ -116,6 +140,10 @@ test("renders detailed sealed summaries on page and downloadable snapshot", asyn
   assert.match(page, /MODE_COPY\[summaryMode\]\.title}下注汇总/);
   assert.match(page, /预估奖金/);
   assert.match(page, /预估净赢/);
+  assert.match(page, /实际返还/);
+  assert.match(page, /实际净赢/);
+  assert.match(page, /未命中返还为 ¥0/);
+  assert.match(page, /estimated-loss/);
   assert.match(route, /betSummaries/);
   assert.match(route, /estimatedPayoutCents/);
   assert.match(canvas, /renderSealedSummaryReceipt/);
@@ -141,7 +169,8 @@ test("persists bettor cheers across ledgers and receipt snapshots", async () => 
   assert.match(route, /note: bet\.note/);
   assert.match(schema, /note: text\("note"\)/);
   assert.match(database, /ALTER TABLE bets ADD COLUMN note/);
-  assert.match(canvas, /助威备注/);
+  assert.match(canvas, /textValue\(summary, \["note"\]/);
+  assert.match(canvas, /if \(bet\.note\)/);
   assert.doesNotMatch(css, /\.payment-code \{/);
   assert.match(migration, /ALTER TABLE `bets` ADD `note`/);
 });

@@ -10,8 +10,6 @@ const ADMIN_PASSWORD_SHA256 =
   "4739ee3bd29e4f415da8ba9298a087e0fdc9c61378420ba8fbbab298bd74c4df";
 const MIN_BET_CENTS = 100;
 const MAX_BET_CENTS = 1000;
-const BET_NOTICE =
-  "预估结果不锁定，最终以封盘奖池和结算规则为准。";
 const SNAPSHOT_NOTICE = "票据为生成时刻的本地账簿快照。";
 
 interface MatchRow {
@@ -24,6 +22,7 @@ interface MatchRow {
   status: MatchStatus;
   result_score_a: number | null;
   result_score_b: number | null;
+  winner_prize_bps: number;
   winner_rollover_in_cents: number;
   winner_rollover_out_cents: number | null;
   winner_rollover_source_match_id: number | null;
@@ -142,7 +141,7 @@ export async function POST(request: Request) {
         await createMatch(payload);
         break;
       case "addBet":
-        artifact = await addBet(payload);
+        await addBet(payload);
         break;
       case "deleteBet":
         await deleteBet(payload);
@@ -154,7 +153,7 @@ export async function POST(request: Request) {
         artifact = await setStatus(payload);
         break;
       case "settle":
-        artifact = await settleMatch(payload);
+        await settleMatch(payload);
         break;
       default:
         throw new ApiError(`不支持的操作：${action}。`);
@@ -218,7 +217,7 @@ async function createMatch(payload: JsonRecord) {
       throw new ApiError("当前比赛已有下注，请先结算当前比赛后再创建新比赛。", 409);
     }
     if ((countRow?.artifact_count ?? 0) > 0) {
-      throw new ApiError("当前比赛已有票据，请先删除当前比赛后再创建新比赛。", 409);
+      throw new ApiError("当前比赛已有历史快照，请先删除当前比赛后再创建新比赛。", 409);
     }
 
     const result = await d1
@@ -284,7 +283,7 @@ async function createMatch(payload: JsonRecord) {
   }
 }
 
-async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
+async function addBet(payload: JsonRecord) {
   const match = await getTargetMatch(optionalId(payload.matchId, "比赛 ID 无效。"));
   if (match.status !== "open") {
     throw new ApiError("当前比赛已封盘，不能新增或修改下注。", 409);
@@ -335,42 +334,7 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
   }
 
   const d1 = getD1();
-  const currentBetResult = await d1
-    .prepare("SELECT * FROM bets WHERE match_id = ? ORDER BY id ASC")
-    .bind(match.id)
-    .all<BetRow>();
-  const currentBets = (currentBetResult.results ?? []) as BetRow[];
-  const previousBet = currentBets.find(
-    (bet) => bet.bettor_key === bettorKey && bet.mode === mode,
-  );
   const now = nextTimestamp(match.updated_at);
-  const proposedBet: BetRow = {
-    id: previousBet?.id ?? 0,
-    match_id: match.id,
-    bettor_name: bettorName,
-    bettor_key: bettorKey,
-    note,
-    mode,
-    amount_cents: amountCents,
-    winner_pick: winnerPick,
-    predicted_score_a: predictedScoreA,
-    predicted_score_b: predictedScoreB,
-    created_at: previousBet?.created_at ?? now,
-    updated_at: now,
-  };
-  const nextBets = [
-    ...currentBets.filter(
-      (bet) => !(bet.bettor_key === bettorKey && bet.mode === mode),
-    ),
-    proposedBet,
-  ];
-  const code = makeArtifactCode("BET", match.id);
-  const artifactPayload = buildBetArtifactPayload(
-    match,
-    nextBets,
-    proposedBet,
-    now,
-  );
 
   const results = await d1.batch([
     d1
@@ -448,60 +412,14 @@ async function addBet(payload: JsonRecord): Promise<PublicArtifact> {
         predictedScoreA,
         predictedScoreB,
       ),
-    d1
-      .prepare(`
-        UPDATE receipt_snapshots
-        SET status = 'superseded', updated_at = ?
-        WHERE kind = 'bet' AND status = 'active'
-          AND bet_id = (
-            SELECT id FROM bets
-            WHERE match_id = ? AND bettor_key = ? AND mode = ? AND updated_at = ?
-          )
-          AND EXISTS (
-            SELECT 1 FROM matches
-            WHERE id = ? AND status = 'open' AND updated_at = ?
-          )
-      `)
-      .bind(now, match.id, bettorKey, mode, now, match.id, now),
-    d1
-      .prepare(`
-        INSERT INTO receipt_snapshots (
-          match_id, bet_id, kind, status, code, revision, payload_json,
-          created_at, updated_at
-        )
-        SELECT m.id, b.id, 'bet', 'active', ?,
-               COALESCE((
-                 SELECT MAX(revision) FROM receipt_snapshots
-                 WHERE kind = 'bet' AND bet_id = b.id
-               ), 0) + 1,
-               json_set(?, '$.bet.id', b.id), ?, ?
-        FROM matches m
-        JOIN bets b ON b.match_id = m.id
-        WHERE m.id = ? AND m.status = 'open' AND m.updated_at = ?
-          AND b.bettor_key = ? AND b.mode = ? AND b.updated_at = ?
-      `)
-      .bind(
-        code,
-        JSON.stringify(artifactPayload),
-        now,
-        now,
-        match.id,
-        now,
-        bettorKey,
-        mode,
-        now,
-      ),
   ]);
 
   if (
     (results[0].meta.changes ?? 0) !== 1 ||
-    (results[1].meta.changes ?? 0) !== 1 ||
-    (results[3].meta.changes ?? 0) !== 1
+    (results[1].meta.changes ?? 0) !== 1
   ) {
     throw new ApiError("比赛状态已变更，请刷新后重试。", 409);
   }
-
-  return getArtifactByCode(code);
 }
 
 async function deleteBet(payload: JsonRecord) {
@@ -708,7 +626,7 @@ async function setStatus(
   return getArtifactByCode(code);
 }
 
-async function settleMatch(payload: JsonRecord): Promise<PublicArtifact> {
+async function settleMatch(payload: JsonRecord) {
   await assertAdminPassword(payload.password);
   const match = await getTargetMatch(optionalId(payload.matchId, "比赛 ID 无效。"));
   if (match.status === "open") {
@@ -731,25 +649,10 @@ async function settleMatch(payload: JsonRecord): Promise<PublicArtifact> {
   const now = nextTimestamp(match.updated_at);
   const { winnerRolloverOutCents, scoreRolloverOutCents } =
     calculateRolloverOutputs(rows, match, scoreA, scoreB);
-  const settledMatch: MatchRow = {
-    ...match,
-    status: "settled",
-    result_score_a: scoreA,
-    result_score_b: scoreB,
-    winner_rollover_out_cents: winnerRolloverOutCents,
-    score_rollover_out_cents: scoreRolloverOutCents,
-    settled_at: now,
-    updated_at: now,
-  };
-  const settlements = calculateSettlements(rows, scoreA, scoreB, settledMatch);
-  const code = makeArtifactCode("RESULT", match.id);
-  const artifactPayload = buildSettledArtifactPayload(
-    settledMatch,
+  const sealedArtifactPayload = buildSealedArtifactPayload(
+    match,
     rows,
-    scoreA,
-    scoreB,
-    settlements,
-    now,
+    match.updated_at,
   );
   const results = await d1.batch([
     d1
@@ -775,54 +678,25 @@ async function settleMatch(payload: JsonRecord): Promise<PublicArtifact> {
     d1
       .prepare(`
         UPDATE receipt_snapshots
-        SET status = 'superseded', updated_at = ?
-        WHERE match_id = ? AND kind = 'settled' AND status = 'active'
+        SET payload_json = ?, updated_at = ?
+        WHERE match_id = ? AND kind = 'sealed' AND status = 'active'
           AND EXISTS (
             SELECT 1 FROM matches
             WHERE id = ? AND status = 'settled' AND updated_at = ?
           )
       `)
-      .bind(now, match.id, match.id, now),
-    d1
-      .prepare(`
-        INSERT INTO receipt_snapshots (
-          match_id, bet_id, kind, status, code, revision, payload_json,
-          created_at, updated_at
-        )
-        SELECT id, NULL, 'settled', 'active', ?,
-               COALESCE((
-                 SELECT MAX(revision) FROM receipt_snapshots
-                 WHERE match_id = ? AND kind = 'settled' AND bet_id IS NULL
-               ), 0) + 1,
-               ?, ?, ?
-        FROM matches
-        WHERE id = ? AND status = 'settled' AND updated_at = ?
-          AND result_score_a = ? AND result_score_b = ?
-          AND winner_rollover_out_cents = ? AND score_rollover_out_cents = ?
-      `)
       .bind(
-        code,
-        match.id,
-        JSON.stringify(artifactPayload),
-        now,
+        JSON.stringify(sealedArtifactPayload),
         now,
         match.id,
+        match.id,
         now,
-        scoreA,
-        scoreB,
-        winnerRolloverOutCents,
-        scoreRolloverOutCents,
       ),
   ]);
 
-  if (
-    (results[0].meta.changes ?? 0) !== 1 ||
-    (results[2].meta.changes ?? 0) !== 1
-  ) {
+  if ((results[0].meta.changes ?? 0) !== 1) {
     throw new ApiError("比赛状态已变更，请刷新后重试。", 409);
   }
-
-  return getArtifactByCode(code);
 }
 
 async function getTargetMatch(matchId?: number) {
@@ -849,7 +723,7 @@ async function getSnapshot() {
     d1.prepare("SELECT * FROM matches ORDER BY id DESC").all<MatchRow>(),
     d1.prepare("SELECT * FROM bets ORDER BY id ASC").all<BetRow>(),
     d1
-      .prepare("SELECT * FROM receipt_snapshots ORDER BY created_at DESC, id DESC")
+      .prepare("SELECT * FROM receipt_snapshots WHERE kind = 'sealed' ORDER BY created_at DESC, id DESC")
       .all<ArtifactRow>(),
   ]);
   const matchRows = (matchResult.results ?? []) as MatchRow[];
@@ -928,6 +802,7 @@ function serializeMatch(
     status: match.status,
     resultScoreA: match.result_score_a,
     resultScoreB: match.result_score_b,
+    winnerPrizeBps: match.winner_prize_bps,
     winnerRolloverInCents: match.winner_rollover_in_cents,
     winnerRolloverOutCents: match.winner_rollover_out_cents,
     scoreRolloverInCents: match.score_rollover_in_cents,
@@ -943,7 +818,20 @@ function serializeMatch(
     updatedAt: match.updated_at,
     settledAt: match.settled_at,
     bets,
-    artifacts: artifactRows.map(serializeArtifact),
+    artifacts: artifactRows.map((artifact) => {
+      const serialized = serializeArtifact(artifact);
+      if (
+        match.status === "closed" &&
+        artifact.kind === "sealed" &&
+        artifact.status === "active"
+      ) {
+        return {
+          ...serialized,
+          payload: buildSealedArtifactPayload(match, rows, artifact.created_at),
+        };
+      }
+      return serialized;
+    }),
     ...(match.status === "settled" && hasResult
       ? {
           settlement: calculateSettlements(
@@ -986,11 +874,10 @@ function calculateSettlements(
       throw new Error(`第 ${match.id} 场比赛缺少${mode === "winner" ? "胜负" : "比分"}滚存结算快照。`);
     }
 
-    // Only fresh winner stakes fund the 20% champion prize. Carry-in has
-    // already passed through that split in an earlier match and is never
-    // charged again. Score betting has no champion-prize deduction.
     const championPrize =
-      mode === "winner" ? (newStake + BigInt(2)) / BigInt(5) : BigInt(0);
+      mode === "winner"
+        ? roundedBasisPoints(newStake, match.winner_prize_bps)
+        : BigInt(0);
     const guessPool = newStake - championPrize + rolloverIn;
     const totalCorrectStake = sumAmounts(correct);
 
@@ -1066,7 +953,10 @@ function calculateRolloverOutputs(
   const scoreBets = rows.filter((bet) => bet.mode === "score");
   const winnerStake = sumAmounts(winnerBets);
   const scoreStake = sumAmounts(scoreBets);
-  const championPrize = (winnerStake + BigInt(2)) / BigInt(5);
+  const championPrize = roundedBasisPoints(
+    winnerStake,
+    match.winner_prize_bps,
+  );
   const winnerAvailable =
     winnerStake - championPrize + BigInt(match.winner_rollover_in_cents);
   const scoreAvailable = scoreStake + BigInt(match.score_rollover_in_cents);
@@ -1079,65 +969,6 @@ function calculateRolloverOutputs(
   return {
     winnerRolloverOutCents: winnerHit ? 0 : safeMoneyNumber(winnerAvailable),
     scoreRolloverOutCents: scoreHit ? 0 : safeMoneyNumber(scoreAvailable),
-  };
-}
-
-function buildBetArtifactPayload(
-  match: MatchRow,
-  rows: BetRow[],
-  bet: BetRow,
-  generatedAt: string,
-): JsonRecord {
-  const pool = calculatePoolSnapshot(rows, match, bet.mode);
-  const selectionStake = rows
-    .filter((candidate) => sameSelection(candidate, bet))
-    .reduce((sum, candidate) => sum + BigInt(candidate.amount_cents), BigInt(0));
-  if (selectionStake <= BigInt(0)) {
-    throw new Error("下注票据无法计算所选项金额。");
-  }
-  const payout =
-    (BigInt(pool.distributablePoolCents) * BigInt(bet.amount_cents) +
-      selectionStake / BigInt(2)) /
-    selectionStake;
-  const payoutCents = safeMoneyNumber(payout);
-  const winnerPickName =
-    bet.winner_pick === "A"
-      ? match.player_a
-      : bet.winner_pick === "B"
-        ? match.player_b
-        : null;
-  const selectionLabel =
-    bet.mode === "winner"
-      ? winnerPickName
-      : `${bet.predicted_score_a}:${bet.predicted_score_b}`;
-
-  return {
-    schemaVersion: 1,
-    kind: "bet",
-    generatedAt,
-    notice: BET_NOTICE,
-    match: buildMatchArtifactSummary(match),
-    bet: {
-      id: bet.id,
-      bettorName: bet.bettor_name,
-      note: bet.note,
-      mode: bet.mode,
-      amountCents: bet.amount_cents,
-      winnerPick: bet.winner_pick,
-      winnerPickName,
-      predictedScoreA: bet.predicted_score_a,
-      predictedScoreB: bet.predicted_score_b,
-      selectionLabel,
-    },
-    pool: {
-      ...pool,
-      selectionStakeCents: safeMoneyNumber(selectionStake),
-    },
-    estimate: {
-      payoutCents,
-      netProfitCents: payoutCents - bet.amount_cents,
-      multiplier: Number((payoutCents / bet.amount_cents).toFixed(2)),
-    },
   };
 }
 
@@ -1251,60 +1082,6 @@ function buildSealedArtifactPayload(
   };
 }
 
-function buildSettledArtifactPayload(
-  match: MatchRow,
-  rows: BetRow[],
-  scoreA: number,
-  scoreB: number,
-  settlements: ModeSettlement[],
-  generatedAt: string,
-): JsonRecord {
-  const winnerSide: WinnerSide = scoreA > scoreB ? "A" : "B";
-  const payoutsByBet = new Map(
-    settlements.flatMap((settlement) =>
-      settlement.payouts.map((payout) => [payout.betId, payout.payoutCents] as const),
-    ),
-  );
-  const betResults = rows.map((bet) => {
-    const isCorrect =
-      bet.mode === "winner"
-        ? bet.winner_pick === winnerSide
-        : bet.predicted_score_a === scoreA && bet.predicted_score_b === scoreB;
-    const payoutCents = payoutsByBet.get(bet.id) ?? 0;
-    return {
-      betId: bet.id,
-      bettorName: bet.bettor_name,
-      note: bet.note,
-      mode: bet.mode,
-      selectionLabel:
-        bet.mode === "winner"
-          ? bet.winner_pick === "A"
-            ? match.player_a
-            : match.player_b
-          : `${bet.predicted_score_a}:${bet.predicted_score_b}`,
-      amountCents: bet.amount_cents,
-      isCorrect,
-      payoutCents,
-      netProfitCents: payoutCents - bet.amount_cents,
-    };
-  });
-  return {
-    schemaVersion: 1,
-    kind: "settled",
-    generatedAt,
-    notice: SNAPSHOT_NOTICE,
-    match: buildMatchArtifactSummary(match),
-    result: {
-      scoreA,
-      scoreB,
-      winnerSide,
-      winnerName: winnerSide === "A" ? match.player_a : match.player_b,
-    },
-    settlements,
-    betResults,
-  };
-}
-
 function calculatePoolSnapshot(
   rows: BetRow[],
   match: MatchRow,
@@ -1318,7 +1095,9 @@ function calculatePoolSnapshot(
   );
   const grossPool = newStake + rolloverIn;
   const championPrize =
-    mode === "winner" ? (newStake + BigInt(2)) / BigInt(5) : BigInt(0);
+    mode === "winner"
+      ? roundedBasisPoints(newStake, match.winner_prize_bps)
+      : BigInt(0);
   const distributablePool = grossPool - championPrize;
 
   return {
@@ -1338,7 +1117,14 @@ function buildMatchArtifactSummary(match: MatchRow) {
     playerB: match.player_b,
     raceTo: match.race_to,
     stakeLimitCents: match.stake_limit_cents,
+    winnerPrizeBps: match.winner_prize_bps,
   };
+}
+
+function roundedBasisPoints(amount: bigint, basisPoints: number) {
+  return (
+    amount * BigInt(basisPoints) + BigInt(5000)
+  ) / BigInt(10000);
 }
 
 function sameSelection(left: BetRow, right: BetRow) {
@@ -1385,7 +1171,7 @@ function serializeArtifact(row: ArtifactRow): PublicArtifact {
   };
 }
 
-function makeArtifactCode(prefix: "BET" | "LOCK" | "RESULT", matchId: number) {
+function makeArtifactCode(prefix: "LOCK", matchId: number) {
   const datePart = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   const randomPart = crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase();
   return `${prefix}-${matchId}-${datePart}-${randomPart}`;

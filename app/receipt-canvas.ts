@@ -1,4 +1,4 @@
-export type ReceiptKind = "bet" | "sealed" | "settled";
+export type ReceiptKind = "sealed";
 
 export type ReceiptArtifact = {
   id: number;
@@ -31,9 +31,7 @@ type SealedBetSummary = {
 };
 
 const KIND_COPY: Record<ReceiptKind, { eyebrow: string; title: string }> = {
-  bet: { eyebrow: "BET RECEIPT", title: "下注票据" },
   sealed: { eyebrow: "SEALED SNAPSHOT", title: "封盘快照" },
-  settled: { eyebrow: "SETTLEMENT RECEIPT", title: "结算票据" },
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -126,75 +124,12 @@ function matchCopy(payload: Record<string, unknown>) {
   };
 }
 
-function betRows(payload: Record<string, unknown>): DisplayRow[] {
-  const mode = textValue(payload, ["modeLabel", "mode", "bet.mode"]);
-  const selection = textValue(payload, [
-    "selection",
-    "pickLabel",
-    "prediction",
-    "bet.selection",
-    "bet.prediction",
-    "bet.selectionLabel",
-  ]);
-  const amount = numberValue(payload, ["amountCents", "stakeCents", "bet.amountCents"]);
-  const newStake = numberValue(payload, ["newStakeCents", "pool.newStakeCents"]);
-  const rollover = numberValue(payload, ["rolloverInCents", "pool.rolloverInCents"]);
-  const currentPool = numberValue(payload, [
-    "currentPoolCents",
-    "pool.currentPoolCents",
-    "pool.grossPoolCents",
-  ]);
-  const distributable = numberValue(payload, [
-    "distributablePoolCents",
-    "availablePoolCents",
-    "pool.distributablePoolCents",
-    "pool.availablePoolCents",
-  ]);
-  const payout = numberValue(payload, [
-    "estimatedPayoutCents",
-    "projectedPayoutCents",
-    "estimate.payoutCents",
-  ]);
-  const profit = numberValue(payload, [
-    "estimatedProfitCents",
-    "projectedProfitCents",
-    "estimate.profitCents",
-    "estimate.netProfitCents",
-  ]);
-  const multiple = numberValue(payload, [
-    "estimatedMultiple",
-    "projectedMultiple",
-    "estimate.multiple",
-    "estimate.multiplier",
-  ]);
-
-  return [
-    { label: "下注人", value: textValue(payload, ["bettorName", "bet.bettorName"]), accent: true },
-    { label: "助威备注", value: textValue(payload, ["note", "bet.note"], "无") },
-    { label: "玩法", value: mode === "winner" ? "胜负局" : mode === "score" ? "猜比分" : mode },
-    { label: "选择", value: selection, accent: true },
-    { label: "下注金额", value: money(amount) },
-    { label: "本局新注", value: money(newStake) },
-    { label: "历史滚存", value: money(rollover) },
-    { label: "当前总池", value: money(currentPool) },
-    { label: "当前可分奖池", value: money(distributable) },
-    { label: "预估返还", value: money(payout), accent: true },
-    { label: "预估净赢", value: money(profit), accent: true },
-    { label: "预估倍数", value: multiple === undefined ? "—" : `${multiple.toFixed(2)}×` },
-  ];
-}
-
 function poolRows(
   payload: Record<string, unknown>,
   mode: "winner" | "score",
-  kind: ReceiptKind,
 ) {
   const prefix = mode === "winner" ? "winner" : "score";
-  const settlements = at(payload, "settlements");
-  const settledPool = Array.isArray(settlements)
-    ? settlements.find((item) => objectValue(item).mode === mode)
-    : undefined;
-  const pool = objectValue(at(payload, prefix, `pools.${prefix}`) ?? settledPool);
+  const pool = objectValue(at(payload, prefix, `pools.${prefix}`));
   const combined = { ...payload, pool };
   const rows: DisplayRow[] = [
     {
@@ -206,33 +141,30 @@ function poolRows(
       value: money(numberValue(combined, ["pool.rolloverInCents", `${prefix}RolloverInCents`])),
     },
     {
-      label: kind === "settled" ? "实际可分奖池" : "封盘当前总池",
+      label: "封盘当前总池",
       value: money(
         numberValue(combined, [
-          ...(kind === "settled"
-            ? ["pool.guessPoolCents", "pool.totalPoolCents"]
-            : ["pool.grossPoolCents"]),
+          "pool.grossPoolCents",
           `${prefix}DistributablePoolCents`,
         ]),
       ),
       accent: true,
     },
     {
-      label: kind === "settled" ? "滚入下局" : "封盘可分奖池",
+      label: "封盘可分奖池",
       value: money(
         numberValue(
           combined,
-          kind === "settled"
-            ? ["pool.rolloverOutCents", "pool.rolloverCents", `${prefix}RolloverOutCents`]
-            : ["pool.distributablePoolCents", "pool.availablePoolCents"],
+          ["pool.distributablePoolCents", "pool.availablePoolCents"],
         ),
       ),
     },
   ];
-  if (mode === "winner") {
+  const championPrize = numberValue(combined, ["pool.championPrizeCents"]);
+  if (mode === "winner" && championPrize !== undefined && championPrize > 0) {
     rows.splice(3, 0, {
-      label: "冠军奖金·新注 20%",
-      value: money(numberValue(combined, ["pool.championPrizeCents"])),
+      label: "旧规则冠军奖金",
+      value: money(championPrize),
     });
   }
   return rows;
@@ -363,65 +295,20 @@ function drawSealedTable(
   return y + height;
 }
 
-function settledBetRows(payload: Record<string, unknown>): DisplayRow[] {
-  const results = at(payload, "betResults");
-  if (!Array.isArray(results)) return [];
-  return results.map((item) => {
-    const result = objectValue(item);
-    const mode = textValue(result, ["mode"]);
-    const correct = Boolean(at(result, "isCorrect", "correct", "hit"));
-    const payout = numberValue(result, ["payoutCents", "actualPayoutCents"]);
-    const profit = numberValue(result, ["netProfitCents", "actualNetProfitCents"]);
-    const note = textValue(result, ["note"], "");
-    const detail = correct
-      ? `返还 ${money(payout)} · 净赢 ${money(profit)}`
-      : `未命中 · 返还 ${money(payout)} · 净赢 ${money(profit)}`;
-    return {
-      label: `${mode === "winner" ? "胜负" : "比分"}·${textValue(result, ["bettorName"])}·${textValue(result, ["selectionLabel"])}${note ? `·“${note}”` : ""}`,
-      value: detail,
-      accent: correct,
-    };
-  });
-}
-
 function snapshotRows(artifact: ReceiptArtifact): DisplayRow[] {
   const payload = artifact.payload;
-  if (artifact.kind === "bet") return betRows(payload);
-
-  const rows: DisplayRow[] = [];
-  if (artifact.kind === "settled") {
-    const scoreA = textValue(payload, ["resultScoreA", "result.scoreA"], "");
-    const scoreB = textValue(payload, ["resultScoreB", "result.scoreB"], "");
-    rows.push({
-      label: "最终比分",
-      value: scoreA && scoreB ? `${scoreA} : ${scoreB}` : textValue(payload, ["finalScore"]),
-      accent: true,
-    });
-    rows.push({
-      label: "冠军",
-      value: textValue(payload, [
-        "champion",
-        "winnerName",
-        "result.champion",
-        "result.winnerName",
-      ]),
-      accent: true,
-    });
-  } else {
-    rows.push({
-      label: "封盘时间",
-      value: textValue(payload, ["sealedAt"], receiptTime(artifact.createdAt)),
-    });
-    const betCount = numberValue(payload, ["betCount", "totalBetCount"]);
-    rows.push({ label: "票据笔数", value: betCount === undefined ? "—" : `${betCount} 笔` });
-  }
+  const rows: DisplayRow[] = [{
+    label: "封盘时间",
+    value: textValue(payload, ["sealedAt"], receiptTime(artifact.createdAt)),
+  }];
+  const betCount = numberValue(payload, ["betCount", "totalBetCount"]);
+  rows.push({ label: "票据笔数", value: betCount === undefined ? "—" : `${betCount} 笔` });
 
   rows.push(
-    ...poolRows(payload, "winner", artifact.kind),
-    ...poolRows(payload, "score", artifact.kind),
+    ...poolRows(payload, "winner"),
+    ...poolRows(payload, "score"),
   );
-  if (artifact.kind === "sealed") rows.push(...sealedOptionRows(payload));
-  if (artifact.kind === "settled") rows.push(...settledBetRows(payload));
+  rows.push(...sealedOptionRows(payload));
   return rows;
 }
 
@@ -621,18 +508,16 @@ export async function renderReceipt(artifact: ReceiptArtifact): Promise<Rendered
 
   const rows = snapshotRows(artifact);
   const startY = 613;
-  const maxRows = artifact.kind === "bet" ? 11 : 19;
+  const maxRows = 19;
   const shownRows = rows.length > maxRows
     ? [
         ...rows.slice(0, maxRows - 1),
         { label: "其余明细", value: `另 ${rows.length - maxRows + 1} 项请在账簿查看` },
       ]
     : rows;
-  const rowHeight = artifact.kind === "bet"
-    ? 58
-    : Math.min(58, Math.floor(585 / Math.max(1, shownRows.length)));
-  const labelFontSize = artifact.kind === "bet" ? 23 : Math.max(17, Math.min(22, rowHeight - 10));
-  const valueFontSize = artifact.kind === "bet" ? 28 : Math.max(19, Math.min(27, rowHeight - 7));
+  const rowHeight = Math.min(58, Math.floor(585 / Math.max(1, shownRows.length)));
+  const labelFontSize = Math.max(17, Math.min(22, rowHeight - 10));
+  const valueFontSize = Math.max(19, Math.min(27, rowHeight - 7));
   shownRows.forEach((row, index) => {
     const y = startY + index * rowHeight;
     if (index > 0) {
@@ -658,7 +543,7 @@ export async function renderReceipt(artifact: ReceiptArtifact): Promise<Rendered
   });
   context.textAlign = "left";
 
-  const noteY = artifact.kind === "bet" ? 1280 : 1264;
+  const noteY = 1264;
   context.fillStyle = "rgba(232,189,88,0.09)";
   roundedRect(context, 78, noteY - 47, 924, 92, 18);
   context.fill();
@@ -668,11 +553,7 @@ export async function renderReceipt(artifact: ReceiptArtifact): Promise<Rendered
   context.font = '800 24px "PingFang SC", "Microsoft YaHei", sans-serif';
   context.textAlign = "center";
   context.fillText(
-    artifact.kind === "bet"
-      ? "仅为生成时预估，最终以封盘结算为准"
-      : artifact.kind === "sealed"
-        ? "封盘后下注已锁定，最终以比赛结果为准"
-        : "该票据为本场最终结算记录",
+    "封盘后下注已锁定，最终以比赛结果为准",
     540,
     noteY + 8,
   );
